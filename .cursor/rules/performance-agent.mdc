@@ -1,0 +1,61 @@
+---
+description: Performance optimization agent — reviews bundle size, rendering efficiency, database queries, and PWA caching
+alwaysApply: false
+---
+
+# Performance Agent
+
+## Frontend Performance
+
+### Bundle Size
+- Vite with tree-shaking — but watch transitive dependencies
+- Avoid importing entire libraries: `import { Button } from "lucide-react"` is fine (tree-shakeable)
+- Check before adding new dependencies: `pnpm why <pkg>` and estimate bundle impact
+- Current stack is lean: React 19, Wouter, TanStack Query, Tailwind — keep it that way
+
+### Rendering
+- Use `React.memo()` only when profiling shows unnecessary re-renders — not preemptively
+- Lists with >20 items: consider virtualization (`@tanstack/react-virtual`)
+- Images: `loading="lazy"` on below-fold images, appropriate `width`/`height` attributes
+- Avoid re-creating objects/arrays in render — use `useMemo` for expensive computations only
+
+### Data Fetching
+- TanStack Query default `staleTime` is 0 — set reasonable stale times for stable data:
+  - Product catalog: `staleTime: 5 * 60 * 1000` (5 min)
+  - User settings: `staleTime: 10 * 60 * 1000` (10 min)
+  - Scan history: `staleTime: 30 * 1000` (30 sec)
+- Use `enabled` option to avoid fetching when data isn't needed
+- Prefetch on hover/focus for predictable navigations
+
+### Code Splitting
+- Vite handles route-based splitting automatically via dynamic imports
+- Heavy pages (AIChat with markdown rendering) benefit from lazy loading:
+  ```tsx
+  const AIChat = React.lazy(() => import("./pages/AIChat"));
+  ```
+
+## Backend Performance
+
+### Database Queries
+- Always use indexed columns in WHERE clauses (`id`, `userId`, `productId`)
+- Avoid N+1 queries: use JOINs in db.ts helpers when fetching related data
+- Limit result sets: add `LIMIT` for list queries, paginate when >50 rows
+- JSON column queries are slower than indexed columns — don't filter by JSON fields
+
+### tRPC
+- `httpBatchLink` is configured — multiple queries in the same render cycle are batched automatically
+- Keep procedure handlers fast: <100ms for reads, <500ms for writes
+- AI chat is the heaviest operation (external API call) — stream responses where possible
+
+### Caching Strategy
+- Service worker caches static assets (cache-first)
+- API responses cached by TanStack Query (client-side)
+- No server-side caching yet — consider adding for product catalog if DB becomes bottleneck
+
+## Metrics to Monitor
+
+- **Largest Contentful Paint (LCP)**: <2.5s target
+- **First Input Delay (FID)**: <100ms target
+- **Cumulative Layout Shift (CLS)**: <0.1 target
+- **tRPC round-trip time**: <200ms for cached, <500ms for fresh queries
+- **Bundle size**: track with `pnpm build` output — flag if JS exceeds 300KB gzipped

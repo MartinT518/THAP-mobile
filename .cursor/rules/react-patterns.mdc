@@ -1,0 +1,63 @@
+---
+description: React component and page patterns for the Thap mobile PWA
+globs: "client/src/**/*.tsx"
+alwaysApply: false
+---
+
+# React Component Patterns
+
+## File Organization
+
+- **Pages** → `client/src/pages/` — one file per route, PascalCase (e.g., `ProductDetail.tsx`)
+- **Reusable components** → `client/src/components/` — shared across pages
+- **UI primitives** → `client/src/components/ui/` — shadcn/ui components, don't modify directly
+- **Hooks** → `client/src/hooks/` — custom hooks extracted from components
+- **Contexts** → `client/src/contexts/` — React contexts for cross-cutting concerns
+
+## Component Guidelines
+
+- Functional components only — no class components
+- Export named functions, not default exports: `export function ProductCard() {}`
+- Co-locate component-specific logic; extract to hooks when reused
+- Props interface defined above the component, not inline
+
+## Data Fetching
+
+```tsx
+// Read data
+const { data, isLoading, error } = trpc.products.myProducts.useQuery();
+
+// Write data
+const mutation = trpc.products.addToMyThings.useMutation({
+  onSuccess: () => {
+    utils.products.myProducts.invalidate();
+    toast.success("Product added");
+  },
+  onError: (err) => toast.error(err.message),
+});
+```
+
+- Never use raw `fetch()` — all API calls go through tRPC hooks
+- Show loading skeletons (see `ProductCardSkeleton`) during `isLoading`
+- Show `EmptyState` component when data array is empty
+
+## Styling
+
+- Tailwind CSS only — no inline styles, no CSS modules
+- Use `cn()` from `lib/utils.ts` for conditional classes
+- Follow design system tokens from `index.css` (colors, spacing, typography)
+- Mobile-first: base styles for mobile, `md:` for larger screens
+- Bottom padding: add `pb-24` on scrollable pages to clear bottom nav (80px)
+
+## Routing (Wouter)
+
+- Register all routes in `App.tsx` using `<Route path="/..." component={...} />`
+- Navigate with `useLocation()` hook: `const [, setLocation] = useLocation()`
+- Link with `<Link href="/path">` — not `<a>` tags for internal navigation
+
+## Accessibility
+
+- Touch targets ≥44px × 44px
+- All images have `alt` text
+- Interactive elements use semantic HTML (`<button>`, `<a>`, `<input>`)
+- Color contrast meets WCAG AA (check against design doc tokens)

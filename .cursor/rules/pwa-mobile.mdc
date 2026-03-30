@@ -1,0 +1,65 @@
+---
+description: PWA and mobile-first development agent — ensures mobile UX quality, PWA compliance, and Capacitor readiness
+globs: "client/**/*.tsx,client/**/*.ts,client/public/**"
+alwaysApply: false
+---
+
+# PWA & Mobile Agent
+
+## Mobile-First Design System
+
+### Viewport Targets
+- Small: 320px–375px (iPhone SE, small Android)
+- Medium: 375px–414px (iPhone 12/13/14)
+- Large: 414px+ (iPhone Pro Max, large Android)
+
+### Layout Constraints
+- Bottom nav height: 80px → add `pb-24` on scrollable content
+- Top app bar: 64px fixed
+- Safe area: respect `env(safe-area-inset-*)` for notch devices
+- Max touch target: ≥44px × 44px for all interactive elements
+
+### Design Tokens (from index.css)
+- Primary: `#2196F3` | Accent: `#4CAF50` | Background: `#FFFFFF`
+- Font: Roboto (400, 500, 600, 700)
+- Spacing base: 4px scale (4, 8, 12, 16, 24, 32)
+- Border radius: 8px (cards), 24px (buttons), 12px (inputs)
+
+## PWA Requirements
+
+### manifest.json (`client/public/manifest.json`)
+- `display: "standalone"` for app-like experience
+- `theme_color` and `background_color` match design system
+- Icons at required sizes (192px, 512px)
+- `start_url: "/"` with proper scope
+
+### Service Worker (`client/public/sw.js`)
+- Cache-first for static assets (JS, CSS, images, fonts)
+- Network-first for API calls (`/api/trpc/*`)
+- Offline fallback page for network failures
+- Update prompt when new version is available
+
+### Performance Budgets
+- First Contentful Paint: <1.5s on 4G
+- Time to Interactive: <3s
+- Bundle size: watch total JS — this is mobile bandwidth
+- Images: lazy load with `loading="lazy"`, use appropriate sizes
+
+## Capacitor Readiness
+
+The app is designed to wrap with Capacitor for native features. When writing code:
+
+- Abstract platform-specific APIs behind interfaces (e.g., camera, storage, notifications)
+- Don't rely on browser-only APIs that won't work in Capacitor WebView
+- Keep the tRPC API usable from both web and native contexts
+- File paths: use relative URLs, not absolute filesystem paths
+
+## Mobile UX Checklist
+
+- [ ] Horizontal scroll areas use `-webkit-overflow-scrolling: touch`
+- [ ] No hover-only interactions (must work with tap)
+- [ ] Form inputs use appropriate `type` (email, tel, number) for mobile keyboards
+- [ ] Loading states show skeletons, not spinners (see `ProductCardSkeleton`)
+- [ ] Pull-to-refresh where applicable
+- [ ] Back navigation via hardware back button works (Wouter handles this)
+- [ ] No layout shift when data loads (reserve space with skeletons)

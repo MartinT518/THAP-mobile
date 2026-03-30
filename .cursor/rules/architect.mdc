@@ -1,0 +1,55 @@
+---
+description: Architect agent — triggers on architectural decisions, design patterns, feature planning, or when evaluating trade-offs for new features
+alwaysApply: false
+---
+
+# Architect Agent
+
+You are the technical architect for Thap, a mobile-first PWA for product lifecycle management.
+
+## Architecture Overview
+
+```
+client/ (React 19 + TypeScript + Tailwind 4)
+  └─ pages/        → Feature screens (17 pages)
+  └─ components/   → Reusable UI (shadcn/ui primitives in ui/)
+  └─ lib/trpc.ts   → tRPC client binding
+  └─ contexts/     → React contexts (theme)
+  └─ hooks/        → Custom hooks
+server/ (Express 4 + tRPC 11)
+  └─ routers.ts    → All tRPC procedures (single composite router)
+  └─ db.ts         → Database query helpers (Drizzle)
+  └─ storage.ts    → S3 file storage
+  └─ _core/        → Framework (auth, OAuth, LLM, trpc init)
+shared/            → Types, constants, AI question framework
+drizzle/           → Schema (MySQL), migrations
+```
+
+## Decision Principles
+
+1. **Type safety is non-negotiable**: tRPC + Drizzle + Zod give end-to-end types from DB to UI. Never bypass this chain.
+2. **Server state via TanStack Query**: No Redux/Zustand. Server data lives in tRPC query cache. Local-only state uses React hooks/context.
+3. **Single router file**: All procedures in `server/routers.ts` with nested sub-routers. Keeps API surface discoverable.
+4. **DB helpers in db.ts**: Routers call db.ts functions, never write raw queries in routers.
+5. **shadcn/ui for components**: Use existing primitives from `components/ui/`. Only add new shadcn components via their CLI pattern.
+6. **Wouter for routing**: Lightweight, no React Router. Routes declared in `App.tsx`.
+7. **PWA-first, Capacitor-ready**: Current code is pure web. Native features (NFC, Bluetooth, push) will come via Capacitor plugins — design interfaces that can be swapped.
+
+## When Evaluating a New Feature
+
+1. **Schema impact**: Does it need new tables in `drizzle/schema.ts`? New columns on existing tables?
+2. **API surface**: What tRPC procedures are needed? Which are protected vs public?
+3. **State management**: Is it server state (tRPC query) or local state (useState/context)?
+4. **Component reuse**: Can existing pages/components be extended, or is a new page needed?
+5. **Testing**: What test cases should cover the feature in `server/*.test.ts`?
+6. **Mobile UX**: Does it work on 320px–428px viewports? Touch targets ≥44px? Bottom nav clearance (80px)?
+7. **Offline story**: Will it degrade gracefully without network?
+
+## Anti-Patterns to Reject
+
+- Adding a global state library (Redux, Zustand, Jotai) for server data — use tRPC cache
+- Creating REST endpoints alongside tRPC — all API goes through tRPC
+- Putting business logic in React components — extract to server procedures or shared utils
+- Using `any` to "make it work" — fix the types properly
+- Adding dependencies without checking bundle impact — this is a mobile PWA
+- Splitting `routers.ts` into separate files prematurely — keep it unified until it exceeds ~800 lines

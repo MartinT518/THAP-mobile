@@ -1,0 +1,66 @@
+---
+description: Security agent — reviews code for authentication, authorization, data protection, and common vulnerability patterns
+alwaysApply: false
+---
+
+# Security Agent
+
+## Authentication
+
+- Auth via Manus OAuth → JWT session cookie (`COOKIE_NAME` from `shared/const.ts`)
+- Session validated in `server/_core/context.ts` via `sdk.authenticateRequest`
+- `protectedProcedure` guarantees `ctx.user` is non-null — use it for all user-scoped operations
+- Never trust client-supplied userId — always use `ctx.user.id` from the session
+
+## Authorization Checks
+
+Every user-scoped operation must verify ownership:
+
+```typescript
+// Correct: scope by authenticated user
+const instances = await db.getUserProductInstances(ctx.user.id);
+
+// Correct: verify ownership before mutation
+const instance = await db.getProductInstanceById(input.instanceId, ctx.user.id);
+if (!instance) throw new TRPCError({ code: "NOT_FOUND" });
+
+// WRONG: trusting client-supplied userId
+const instances = await db.getUserProductInstances(input.userId);
+```
+
+## Secrets & API Keys
+
+- **Server-side secrets**: environment variables only (`process.env.JWT_SECRET`, etc.)
+- **User AI API keys**: stored encrypted-at-rest in `ai_provider_settings` table, never logged
+- **Client-side**: only `VITE_*` prefixed env vars are exposed — never put secrets in `VITE_*` vars
+- **No hardcoded**: tokens, passwords, API keys, or connection strings in source code
+
+## Input Validation
+
+- All tRPC inputs validated via Zod — this is the first defense
+- Add `.max()` on strings to prevent oversized payloads
+- Sanitize user-generated content before rendering (React escapes by default, but watch `dangerouslySetInnerHTML`)
+- File uploads: validate MIME type, enforce size limits, use S3 presigned URLs
+
+## Common Patterns to Flag
+
+- `eval()`, `new Function()`, template string SQL → always reject
+- `dangerouslySetInnerHTML` with user content → require sanitization
+- CORS misconfiguration (check Express CORS setup in `_core/index.ts`)
+- Missing `credentials: "include"` on fetch calls (breaks auth cookies)
+- Logging sensitive data (`console.log(user.apiKey)`, `console.log(ctx)`)
+
+## Rate Limiting
+
+Currently **no rate limiting** is implemented. Flag if:
+- AI chat endpoints are called without throttling (can burn API credits)
+- Auth endpoints lack brute-force protection
+- File upload endpoints allow unlimited uploads
+
+## Audit Checklist for PRs
+
+1. No new `publicProcedure` where `protectedProcedure` is needed
+2. No user data leakage across accounts (always filter by userId)
+3. No secrets in committed files (check `.env`, config files)
+4. Input size bounds on all string/array inputs
+5. Error messages don't leak internal details (stack traces, SQL, file paths)

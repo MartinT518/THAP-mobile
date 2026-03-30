@@ -1,0 +1,50 @@
+---
+description: Internationalization agent — guides multi-language support implementation for 14 target languages
+globs: "client/src/**/*.tsx,shared/**/*.ts"
+alwaysApply: false
+---
+
+# i18n Agent
+
+## Current State
+
+- UI prepared for 14 languages but i18n framework **not yet integrated**
+- Language selection page exists (`client/src/pages/LanguageSelection.tsx`)
+- User preference stored in `users.languageCode` column
+- All UI text is currently hardcoded in English
+
+## Target Languages (14)
+
+English, Estonian, Finnish, Swedish, Norwegian, Danish, German, French, Spanish, Italian, Portuguese, Polish, Russian, Chinese
+
+## Implementation Plan
+
+When integrating i18n:
+
+1. **Framework**: Use `react-i18next` with `i18next` — lightweight, well-supported with React
+2. **Translation files**: JSON per language in `client/src/locales/{lang}.json`
+3. **Key structure**: Nested by feature area:
+   ```json
+   {
+     "home": { "title": "My Things", "scanHistory": "Scan History", "showAll": "Show all" },
+     "product": { "askAi": "Ask AI about this product", "specs": "Specifications" },
+     "nav": { "myThings": "My things", "search": "Search", "feed": "Feed", "menu": "Menu" }
+   }
+   ```
+4. **Usage**: `const { t } = useTranslation(); <h1>{t("home.title")}</h1>`
+5. **Detection**: Read from `users.languageCode` (server) or localStorage (offline)
+
+## AI Questions i18n
+
+The 50+ AI questions in `shared/aiQuestions.ts` also need translation:
+- Store translations alongside question definitions
+- Use language code to select appropriate question text
+- System prompts to AI should include user's language preference
+
+## Rules
+
+- Never hardcode user-visible text — always use translation keys
+- Include pluralization support for countable items
+- Date/number formatting: use `Intl.DateTimeFormat` and `Intl.NumberFormat` with locale
+- RTL: not needed for current 14 languages (no Arabic/Hebrew)
+- Keep translation keys short but descriptive

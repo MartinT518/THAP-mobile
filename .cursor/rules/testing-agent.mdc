@@ -1,0 +1,86 @@
+---
+description: Testing agent — guides writing and reviewing tests for tRPC procedures and shared logic
+globs: "server/**/*.test.ts,shared/**/*.test.ts"
+alwaysApply: false
+---
+
+# Testing Agent
+
+## Test Framework
+
+- **Vitest** with `environment: "node"`
+- Test files: `server/*.test.ts` (colocated with source)
+- Run: `pnpm test`
+
+## Test Pattern: tRPC Caller
+
+All API tests use `appRouter.createCaller(mockContext)`:
+
+```typescript
+import { describe, expect, it } from "vitest";
+import { appRouter } from "./routers";
+import type { TrpcContext } from "./_core/context";
+
+function createAuthContext(): { ctx: TrpcContext } {
+  const user = {
+    id: 1,
+    openId: "test-user",
+    email: "test@example.com",
+    name: "Test User",
+    loginMethod: "manus",
+    role: "user" as const,
+    languageCode: "en",
+    countryCode: null,
+    postalCode: null,
+    createdAt: new Date(),
+    updatedAt: new Date(),
+    lastSignedIn: new Date(),
+  };
+  return {
+    ctx: {
+      user,
+      req: { protocol: "https", headers: {} } as TrpcContext["req"],
+      res: { clearCookie: () => {} } as TrpcContext["res"],
+    },
+  };
+}
+
+describe("Feature Name", () => {
+  it("should do the expected thing", async () => {
+    const { ctx } = createAuthContext();
+    const caller = appRouter.createCaller(ctx);
+    const result = await caller.feature.procedure({ input: "value" });
+    expect(result).toMatchObject({ success: true });
+  });
+});
+```
+
+## What to Test
+
+### Must Test
+- Every new tRPC procedure (happy path + error cases)
+- Input validation (invalid inputs should throw `TRPCError`)
+- Authorization (protected procedures reject unauthenticated callers)
+- Shared business logic in `shared/` (e.g., AI question framework)
+
+### Should Test
+- Edge cases: empty arrays, null values, max-length strings
+- Database constraint violations (duplicate entries, missing foreign keys)
+- Error messages are meaningful (not generic "something went wrong")
+
+### Coverage Gaps to Fill
+Current tests: 5 files, 40 cases (backend only). Missing coverage for:
+- Scan history CRUD operations
+- User settings update/retrieval
+- Document upload/delete procedures
+- Profile update procedures
+- Cleanup/dedup procedures
+- Authorization boundary tests (user A can't access user B's data)
+
+## Test Naming
+
+Use descriptive `it("should ...")` names that describe the expected behavior, not the implementation.
+
+## No Mocks for DB
+
+Tests hit the real database (test environment). This is integration-style testing — validates the full tRPC → db.ts → Drizzle → MySQL chain.

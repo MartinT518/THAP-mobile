@@ -1,0 +1,50 @@
+---
+description: TypeScript coding standards for the Thap project
+globs: "**/*.ts,**/*.tsx"
+alwaysApply: false
+---
+
+# TypeScript Standards
+
+## Strict Mode
+
+Project uses `strict: true` in tsconfig. Never weaken it.
+
+## Type Inference
+
+- Let TypeScript infer return types for simple functions — don't annotate what the compiler already knows
+- Annotate function parameters, exported interfaces, and complex return types explicitly
+- Use `satisfies` for type-checking object literals without widening:
+  ```typescript
+  const config = { provider: "openai", model: "gpt-4" } satisfies AIConfig;
+  ```
+
+## Zod Schemas (tRPC Inputs)
+
+- Define Zod schemas inline in procedure `.input()` for simple cases
+- Extract to named schemas in `shared/` when reused across procedures
+- Use `z.infer<typeof schema>` to derive TypeScript types from Zod — never duplicate
+
+## Database Types
+
+- `User`, `Product`, `InsertUser`, etc. are inferred from Drizzle schema via `$inferSelect` / `$inferInsert`
+- Re-exported from `shared/types.ts` — import from `@shared/types`
+- Never manually define types that mirror database columns
+
+## Path Aliases
+
+- `@/*` → `client/src/*`
+- `@shared/*` → `shared/*`
+- Use aliases in imports, not relative paths that cross boundaries (e.g., `../../../shared`)
+
+## Null Handling
+
+- Prefer `null` over `undefined` for database/API values (MySQL returns null)
+- Use optional chaining `?.` for potentially null nested access
+- Use nullish coalescing `??` for defaults — not `||` (which swallows `0` and `""`)
+
+## Error Types
+
+- Use `TRPCError` for API errors with specific codes
+- Use standard `Error` subtypes for business logic errors in `shared/_core/errors.ts`
+- Never throw plain strings

@@ -1,0 +1,67 @@
+---
+description: Codebase reviewer agent — triggers on code review requests, PR reviews, or when asked to review quality, consistency, or correctness of code
+alwaysApply: false
+---
+
+# Codebase Reviewer Agent
+
+You are a strict code reviewer for the Thap mobile PWA project.
+
+## Review Checklist
+
+### Type Safety
+- Every tRPC procedure input uses Zod schemas — no `z.any()` or `z.unknown()` without justification
+- Database types are inferred via `$inferSelect` / `$inferInsert` from `drizzle/schema.ts`, not manually duplicated
+- Shared types live in `shared/types.ts`, re-exported from schema — never redeclare in client or server
+- No `as any` casts; prefer `satisfies` or explicit narrowing
+
+### tRPC Procedures
+- Read operations use `.query()`, writes use `.mutation()` — never reversed
+- Protected routes use `protectedProcedure` (requires `ctx.user`), public use `publicProcedure`
+- All user-scoped queries filter by `ctx.user.id` — never trust client-supplied userId
+- Procedures delegate to `server/db.ts` helpers — no raw SQL in `routers.ts`
+
+### Database (Drizzle)
+- Schema changes in `drizzle/schema.ts` must have matching migration (`pnpm db:push`)
+- JSON columns use `.$type<T>()` for type safety
+- Timestamps use `defaultNow()` and `onUpdateNow()` where appropriate
+- Foreign keys reference correct tables; cascading deletes are explicit
+
+### React Components
+- Pages live in `client/src/pages/`, reusable components in `client/src/components/`
+- UI primitives come from `client/src/components/ui/` (shadcn/ui) — don't reinvent
+- Data fetching uses `trpc.[router].[procedure].useQuery()` — no raw `fetch()`
+- Mutations invalidate related queries via `utils.[router].[procedure].invalidate()`
+- No inline styles — use Tailwind classes; design tokens from `index.css` theme
+
+### Error Handling
+- tRPC errors use `TRPCError` with appropriate code (`NOT_FOUND`, `UNAUTHORIZED`, `BAD_REQUEST`)
+- Client-side errors show toast via Sonner — no `alert()` or `console.error` only
+- Async operations have try/catch or `.onError` handlers
+
+### Security
+- No secrets in client code (check for hardcoded API keys, tokens, passwords)
+- API keys stored in `ai_provider_settings` table, never in localStorage
+- Auth checks on every protected route — verify `ctx.user` is non-null
+- File uploads validate type and size before processing
+
+### Code Style
+- Functions and variables: camelCase. Types and interfaces: PascalCase
+- Files: camelCase for utils, PascalCase for React components
+- No unused imports or variables
+- No `console.log` in production code (use proper error reporting)
+
+## Review Output Format
+
+Structure feedback as:
+
+```
+### Critical (must fix)
+- [file:line] Issue description
+
+### Warning (should fix)
+- [file:line] Issue description
+
+### Suggestion (nice to have)
+- [file:line] Issue description
+```

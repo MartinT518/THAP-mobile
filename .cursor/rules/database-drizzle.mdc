@@ -1,0 +1,58 @@
+---
+description: Database schema and Drizzle ORM patterns for the Thap project
+globs: "drizzle/**/*.ts,server/db.ts"
+alwaysApply: false
+---
+
+# Database & Drizzle Patterns
+
+## Schema Location
+
+Single source of truth: `drizzle/schema.ts` (MySQL via `drizzle-orm/mysql-core`)
+
+## Existing Tables
+
+| Table | Purpose |
+|-------|---------|
+| `users` | Auth, profile, preferences (language, country) |
+| `products` | Product catalog (external productId, metadata JSON) |
+| `product_instances` | User-owned products (purchase info, tags, notes) |
+| `scan_history` | QR scan tracking per user |
+| `ai_conversations` | Chat history with provider and messages JSON |
+| `ai_provider_settings` | Per-user AI API key configuration |
+| `product_documents` | Attached files (receipts, manuals) via S3 |
+
+## Schema Conventions
+
+- Primary keys: `int("id").autoincrement().primaryKey()`
+- Timestamps: always include `createdAt` + `updatedAt` with `defaultNow()` and `onUpdateNow()`
+- String columns: use `varchar` with explicit `length` for indexed/constrained fields, `text` for unbounded
+- JSON columns: use `json("col").$type<TypeHere>()` for type safety
+- Enums: use `mysqlEnum` for small fixed sets (e.g., roles)
+- Export inferred types: `export type X = typeof table.$inferSelect`
+
+## Query Helpers (server/db.ts)
+
+- One function per operation: `getUserProductInstances(userId)`, `getProductById(id)`, etc.
+- Always filter user-scoped data by userId parameter
+- Return typed results — callers should not need to cast
+- Use Drizzle query builder (`eq`, `and`, `desc`) — avoid raw SQL unless absolutely necessary
+
+## Migrations
+
+```bash
+pnpm db:push      # Push schema changes to DB (dev)
+pnpm db:generate  # Generate SQL migration files
+```
+
+- Always run `db:push` after schema changes during development
+- Migration files go in `drizzle/` directory automatically
+- Never manually edit generated migration SQL
+
+## Adding a New Table
+
+1. Define table in `drizzle/schema.ts` with proper types and constraints
+2. Export `type X = typeof table.$inferSelect` and `type InsertX = typeof table.$inferInsert`
+3. Add query helpers in `server/db.ts`
+4. Run `pnpm db:push`
+5. Add tRPC procedures in `server/routers.ts`

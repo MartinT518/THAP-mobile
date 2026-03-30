@@ -1,0 +1,53 @@
+---
+description: Core project conventions that apply to all development in the Thap codebase
+alwaysApply: true
+---
+
+# Thap Project Conventions
+
+## What is Thap?
+
+A mobile-first PWA for product lifecycle management. Users scan QR codes, track products, and get AI-powered answers about their belongings.
+
+## Tech Stack
+
+- **Frontend**: React 19, TypeScript, Tailwind 4, Wouter, shadcn/ui, TanStack Query
+- **Backend**: Express 4, tRPC 11, Drizzle ORM, MySQL, Superjson
+- **Testing**: Vitest
+- **Build**: Vite 7, pnpm
+- **Deployment**: Manus platform (PWA)
+
+## Feature Development Workflow
+
+1. Schema → `drizzle/schema.ts` → `pnpm db:push`
+2. DB helpers → `server/db.ts`
+3. API procedures → `server/routers.ts`
+4. UI → `client/src/pages/` or `client/src/components/`
+5. Routes → `client/src/App.tsx`
+6. Tests → `server/*.test.ts`
+
+## Key Patterns
+
+- All API calls through tRPC — never raw fetch
+- Database queries through `server/db.ts` — never in routers directly
+- Types inferred from Drizzle schema — never manually duplicated
+- State via TanStack Query cache — no global state library
+- UI primitives from shadcn/ui — don't reinvent
+- Styling with Tailwind — no inline styles or CSS modules
+
+## File Naming
+
+- React components: `PascalCase.tsx`
+- Utilities/hooks: `camelCase.ts`
+- Test files: `featureName.test.ts`
+- Shared types: `shared/types.ts`
+
+## Commands
+
+```
+pnpm dev          # Dev server on localhost:3000
+pnpm test         # Run Vitest
+pnpm build        # Production build
+pnpm db:push      # Apply schema changes
+pnpm check        # TypeScript type check
+```

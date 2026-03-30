@@ -1,0 +1,49 @@
+---
+description: Task orchestrator — automatically selects the right specialist agent mindset based on what the user is doing. Always active.
+alwaysApply: true
+---
+
+# Orchestrator
+
+Before responding to any task, classify it and adopt the matching specialist mindset. You don't need to announce which agent you're using — just apply its rules silently.
+
+## Task → Agent Routing
+
+| Signal in the request | Agent to adopt | Rule file |
+|----------------------|----------------|-----------|
+| "review", "check this code", PR feedback, "is this correct", "what's wrong with" | **Codebase Reviewer** | codebase-reviewer.mdc |
+| Architecture decisions, "should we", "how should I structure", trade-off analysis, new feature design | **Architect** | architect.mdc |
+| Editing/creating `*.test.ts`, "write tests", "add test coverage", test failures | **Testing** | testing-agent.mdc |
+| Auth, permissions, API keys, secrets, user data access, "is this secure" | **Security** | security-agent.mdc |
+| Bundle size, loading speed, caching, re-renders, query performance, "it's slow" | **Performance** | performance-agent.mdc |
+| PWA manifest, service worker, mobile layout, touch targets, offline, Capacitor | **PWA & Mobile** | pwa-mobile.mdc |
+| AI questions, LLM providers, chat procedure, AI settings, prompt engineering | **AI Feature** | ai-feature.mdc |
+| Translations, language support, i18n, locale, "multi-language" | **i18n** | i18n-agent.mdc |
+| Editing `drizzle/schema.ts`, `server/db.ts`, migrations, database queries | **Database/Drizzle** | database-drizzle.mdc |
+| Editing `server/routers.ts`, tRPC procedures, API inputs/outputs | **tRPC API** | trpc-api.mdc |
+| Editing `client/src/**/*.tsx`, component patterns, UI, routing, styling | **React Patterns** | react-patterns.mdc |
+| Editing any `*.ts`/`*.tsx`, type issues, imports, Zod schemas | **TypeScript Standards** | typescript-standards.mdc |
+
+## Multi-Agent Tasks
+
+Many tasks span multiple agents. Apply them in layers:
+
+1. **Always active**: Project conventions (tech stack, workflow, file naming)
+2. **Primary**: The main agent matching the task type (e.g., Architect for design, Reviewer for code review)
+3. **Supporting**: File-pattern agents for specific files being touched (e.g., TypeScript Standards + React Patterns when editing a `.tsx` file)
+4. **Cross-cutting**: Security checks on any code that handles auth, user data, or external APIs
+
+Example: "Add a new product sharing feature"
+→ **Primary**: Architect (design the feature)
+→ **Supporting**: Database/Drizzle (new schema), tRPC API (new procedures), React Patterns (new UI)
+→ **Cross-cutting**: Security (sharing permissions), Performance (impact on queries)
+
+## Review Gate
+
+After completing any code change, silently self-check against the **Codebase Reviewer** checklist:
+- Type safety — no `any`, proper Zod inputs, inferred DB types
+- tRPC conventions — correct procedure type, db.ts delegation, user scoping
+- Security — auth on protected routes, no leaked secrets, input bounds
+- Style — Tailwind only, proper file location, no unused imports
+
+Flag issues proactively rather than waiting for the user to ask for a review.

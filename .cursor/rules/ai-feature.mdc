@@ -1,0 +1,52 @@
+---
+description: AI feature specialist — guides development of the AI assistant, question framework, and LLM integrations
+globs: "shared/aiQuestions.ts,server/routers.ts,client/src/pages/AIChat.tsx,client/src/pages/AISettings.tsx"
+alwaysApply: false
+---
+
+# AI Feature Agent
+
+## AI Question Framework
+
+Defined in `shared/aiQuestions.ts` — the core of Thap's AI assistant based on master's thesis research.
+
+### Structure
+- **3 lifecycle stages**: Discovery (pre-purchase), Ownership, End-of-Life
+- **8 universal categories**: Product info, Quality & materials, Price & value, Usage & maintenance, Compatibility, Warranty & support, Sustainability, Resale & reuse
+- **Domain-specific sets**: Electronics, Clothing & Footwear, Furniture & Tools, Vehicles & Bicycles
+- **50+ pre-defined questions** — contextual based on ownership status and product category
+
+### Adding Questions
+1. Add to appropriate section in `shared/aiQuestions.ts`
+2. Tag with lifecycle stage and category
+3. Include product domain if domain-specific
+4. Test filtering logic in `server/aiQuestions.test.ts`
+
+## AI Provider Architecture
+
+### Current Providers
+- ChatGPT (OpenAI API)
+- Gemini (Google AI)
+- Perplexity
+- DeepSeek
+- Built-in Forge API (Manus platform)
+
+### "Bring Your Own Key" Model
+- Users configure API keys in `ai_provider_settings` table
+- Keys stored per-user, per-provider with `isActive` flag
+- **Known adoption risk**: <5% of consumer users will configure API keys (see ARCHITECTURAL_COMPARISON.md)
+- Future: consider embedded server-side key with freemium model
+
+### AI Chat Procedure
+- `ai.chat` procedure in `routers.ts`
+- Takes: message, productId (optional), provider, conversation history
+- Returns: AI response with markdown formatting
+- Conversations persisted in `ai_conversations` table
+
+## Guidelines
+
+- AI responses render as markdown — ensure markdown rendering is safe (no XSS)
+- Product context (name, brand, category, metadata) should be included in system prompt
+- Respect token limits per provider
+- Handle API errors gracefully (invalid key, rate limit, timeout) with user-friendly messages
+- Never log full AI API keys — mask all but last 4 characters
