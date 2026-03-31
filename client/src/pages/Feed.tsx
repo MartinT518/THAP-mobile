@@ -13,8 +13,12 @@ import {
   Scan,
   LogIn,
   Rss,
+  Newspaper,
+  Megaphone,
+  ExternalLink,
 } from "lucide-react";
 import { trpc } from "@/lib/trpc";
+import { openExternalLink } from "@/lib/utils";
 import { useLocation } from "wouter";
 import type { FeedItemType } from "@shared/types";
 
@@ -46,6 +50,16 @@ const TYPE_CONFIG: Record<
     icon: Leaf,
     iconClass: "text-green-600",
     bgClass: "bg-green-100",
+  },
+  brand_news: {
+    icon: Newspaper,
+    iconClass: "text-sky-700",
+    bgClass: "bg-sky-100",
+  },
+  brand_commercial: {
+    icon: Megaphone,
+    iconClass: "text-violet-700",
+    bgClass: "bg-violet-100",
   },
 };
 
@@ -119,16 +133,34 @@ export default function Feed() {
               {feedItems.map((item) => {
                 const config = TYPE_CONFIG[item.type];
                 const Icon = config.icon;
+                const isBrandItem =
+                  item.type === "brand_news" || item.type === "brand_commercial";
+                const openExternal = item.linkUrl
+                  ? () => openExternalLink(item.linkUrl!)
+                  : undefined;
+                const goProduct =
+                  item.productId && !item.linkUrl
+                    ? () => navigate(`/product/${item.productId}`)
+                    : undefined;
+                const onCardClick = openExternal ?? goProduct;
                 return (
                   <Card
                     key={item.id}
-                    className={`p-4 transition-colors ${item.productId ? "cursor-pointer hover:bg-muted/50" : ""}`}
-                    onClick={
-                      item.productId
-                        ? () => navigate(`/product/${item.productId}`)
-                        : undefined
-                    }
+                    className={`p-4 transition-colors overflow-hidden ${
+                      onCardClick ? "cursor-pointer hover:bg-muted/50" : ""
+                    }`}
+                    onClick={onCardClick}
                   >
+                    {item.feedImageUrl ? (
+                      <div className="-mx-4 -mt-4 mb-3 aspect-[2/1] max-h-36 bg-muted">
+                        <img
+                          src={item.feedImageUrl}
+                          alt=""
+                          className="w-full h-full object-cover"
+                          loading="lazy"
+                        />
+                      </div>
+                    ) : null}
                     <div className="flex gap-3">
                       <div
                         className={`w-10 h-10 rounded-full flex items-center justify-center flex-shrink-0 ${config.bgClass}`}
@@ -137,9 +169,23 @@ export default function Feed() {
                       </div>
                       <div className="flex-1 min-w-0">
                         <div className="flex items-start justify-between gap-2 mb-1">
-                          <h3 className="font-semibold text-sm">
-                            {item.title}
-                          </h3>
+                          <div className="min-w-0">
+                            {isBrandItem ? (
+                              <span className="inline-block text-[10px] font-semibold uppercase tracking-wide text-muted-foreground mb-0.5">
+                                {item.type === "brand_news"
+                                  ? t("feed.badgeNews")
+                                  : t("feed.badgeCommercial")}
+                              </span>
+                            ) : null}
+                            <h3 className="font-semibold text-sm">
+                              {item.title}
+                            </h3>
+                            {item.brand ? (
+                              <p className="text-xs text-muted-foreground mt-0.5">
+                                {t("feed.fromBrand", { brand: item.brand })}
+                              </p>
+                            ) : null}
+                          </div>
                           <span className="text-xs text-muted-foreground flex-shrink-0">
                             {formatRelativeTime(item.timestamp, t)}
                           </span>
@@ -147,6 +193,12 @@ export default function Feed() {
                         <p className="text-sm text-muted-foreground leading-relaxed">
                           {item.content}
                         </p>
+                        {item.linkUrl ? (
+                          <p className="text-xs text-primary font-medium mt-2 flex items-center gap-1">
+                            <ExternalLink className="w-3.5 h-3.5" aria-hidden />
+                            {t("feed.openLink")}
+                          </p>
+                        ) : null}
                       </div>
                     </div>
                   </Card>

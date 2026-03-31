@@ -30,6 +30,8 @@ describe("Feed", () => {
         "warranty_alert",
         "care_tip",
         "sustainability_insight",
+        "brand_news",
+        "brand_commercial",
       ]).toContain(item.type);
     }
   });
@@ -47,13 +49,13 @@ describe("Feed", () => {
     }
   });
 
-  it("should return at most 50 items", async () => {
+  it("should return at most 80 items", async () => {
     const ctx = createAuthContext();
     const caller = appRouter.createCaller(ctx);
 
     const items = await caller.feed.list();
 
-    expect(items.length).toBeLessThanOrEqual(50);
+    expect(items.length).toBeLessThanOrEqual(80);
   });
 
   it("should reject unauthenticated access", async () => {

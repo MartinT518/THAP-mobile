@@ -19,6 +19,7 @@ import {
   Receipt,
   BookOpen,
   Trash2,
+  Camera,
 } from "lucide-react";
 
 const ALLOWED_MIME_TYPES = [
@@ -55,6 +56,7 @@ export default function ProductEdit() {
   const { id } = useParams<{ id: string }>();
   const [, navigate] = useLocation();
   const fileInputRef = useRef<HTMLInputElement>(null);
+  const cameraInputRef = useRef<HTMLInputElement>(null);
 
   const { data: product, isLoading } = trpc.products.getById.useQuery(
     { id: parseInt(id!) },
@@ -235,6 +237,9 @@ export default function ProductEdit() {
 
     if (fileInputRef.current) {
       fileInputRef.current.value = "";
+    }
+    if (cameraInputRef.current) {
+      cameraInputRef.current.value = "";
     }
   };
 
@@ -441,21 +446,62 @@ export default function ProductEdit() {
                 onChange={handleFileSelect}
                 className="hidden"
               />
+              <input
+                ref={cameraInputRef}
+                type="file"
+                accept="image/*"
+                capture="environment"
+                onChange={handleFileSelect}
+                className="hidden"
+              />
 
-              <Button
-                type="button"
-                variant="outline"
-                className="w-full"
-                disabled={uploadDocumentMutation.isPending}
-                onClick={() => fileInputRef.current?.click()}
-              >
-                {uploadDocumentMutation.isPending ? (
-                  <Loader2 className="w-4 h-4 mr-2 animate-spin" />
-                ) : (
-                  <Upload className="w-4 h-4 mr-2" />
-                )}
-                {t("productEdit.upload")} {t(`productEdit.doc${selectedDocType.charAt(0).toUpperCase() + selectedDocType.slice(1)}`)}
-              </Button>
+              {(selectedDocType === "photo" || selectedDocType === "receipt") ? (
+                <div className="flex gap-2">
+                  <Button
+                    type="button"
+                    variant="outline"
+                    className="flex-1"
+                    disabled={uploadDocumentMutation.isPending}
+                    onClick={() => cameraInputRef.current?.click()}
+                  >
+                    {uploadDocumentMutation.isPending ? (
+                      <Loader2 className="w-4 h-4 mr-2 animate-spin" />
+                    ) : (
+                      <Camera className="w-4 h-4 mr-2" />
+                    )}
+                    {t("productEdit.takePhoto")}
+                  </Button>
+                  <Button
+                    type="button"
+                    variant="outline"
+                    className="flex-1"
+                    disabled={uploadDocumentMutation.isPending}
+                    onClick={() => fileInputRef.current?.click()}
+                  >
+                    {uploadDocumentMutation.isPending ? (
+                      <Loader2 className="w-4 h-4 mr-2 animate-spin" />
+                    ) : (
+                      <Upload className="w-4 h-4 mr-2" />
+                    )}
+                    {t("productEdit.chooseFile")}
+                  </Button>
+                </div>
+              ) : (
+                <Button
+                  type="button"
+                  variant="outline"
+                  className="w-full"
+                  disabled={uploadDocumentMutation.isPending}
+                  onClick={() => fileInputRef.current?.click()}
+                >
+                  {uploadDocumentMutation.isPending ? (
+                    <Loader2 className="w-4 h-4 mr-2 animate-spin" />
+                  ) : (
+                    <Upload className="w-4 h-4 mr-2" />
+                  )}
+                  {t("productEdit.upload")} {t(`productEdit.doc${selectedDocType.charAt(0).toUpperCase() + selectedDocType.slice(1)}`)}
+                </Button>
+              )}
             </div>
 
             {/* Existing documents */}

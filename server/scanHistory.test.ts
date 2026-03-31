@@ -1,6 +1,11 @@
-import { describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import { appRouter } from "./routers";
 import { createAuthContext, createUnauthContext, HAS_DB } from "./_testHelpers";
+import * as db from "./db";
+
+afterEach(() => {
+  vi.restoreAllMocks();
+});
 
 describe("Scan History", () => {
   it("should list scan history (empty when no DB)", async () => {
@@ -23,6 +28,41 @@ describe("Scan History", () => {
         caller.scanHistory.add({ productId: 1 })
       ).rejects.toThrow("Database not available");
     }
+  });
+
+  it("should skip adding owned products to scan history", async () => {
+    const ctx = createAuthContext();
+    const caller = appRouter.createCaller(ctx);
+
+    const ownershipSpy = vi.spyOn(db, "isProductOwned").mockResolvedValue(true);
+    const addSpy = vi.spyOn(db, "addToScanHistory").mockResolvedValue({} as never);
+
+    await expect(caller.scanHistory.add({ productId: 1 })).resolves.toEqual({
+      success: true,
+      recorded: false,
+    });
+
+    expect(ownershipSpy).toHaveBeenCalledWith(ctx.user!.id, 1);
+    expect(addSpy).not.toHaveBeenCalled();
+  });
+
+  it("should add unowned products to scan history", async () => {
+    const ctx = createAuthContext();
+    const caller = appRouter.createCaller(ctx);
+
+    const ownershipSpy = vi.spyOn(db, "isProductOwned").mockResolvedValue(false);
+    const addSpy = vi.spyOn(db, "addToScanHistory").mockResolvedValue({} as never);
+
+    await expect(caller.scanHistory.add({ productId: 1 })).resolves.toEqual({
+      success: true,
+      recorded: true,
+    });
+
+    expect(ownershipSpy).toHaveBeenCalledWith(ctx.user!.id, 1);
+    expect(addSpy).toHaveBeenCalledWith({
+      userId: ctx.user!.id,
+      productId: 1,
+    });
   });
 
   it("should delete a scan history entry", async () => {

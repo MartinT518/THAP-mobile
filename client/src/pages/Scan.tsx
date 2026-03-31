@@ -1,33 +1,45 @@
 import { MobileLayout } from "@/components/MobileLayout";
 import { AppBar } from "@/components/AppBar";
-import { useEffect, useRef, useState } from "react";
-import { Html5Qrcode } from "html5-qrcode";
+import { useCallback, useRef, useState } from "react";
+import { Scanner, type IDetectedBarcode } from "@yudiel/react-qr-scanner";
+import type { BarcodeFormat } from "barcode-detector";
 import { Button } from "@/components/ui/button";
 import { Card } from "@/components/ui/card";
-import { Camera, AlertCircle, CheckCircle, Loader2 } from "lucide-react";
+import { AlertCircle, CheckCircle, Loader2, LogIn } from "lucide-react";
 import { useLocation } from "wouter";
 import { trpc } from "@/lib/trpc";
 import { useAuth } from "@/_core/hooks/useAuth";
 import { toast } from "sonner";
 import { useTranslation } from "react-i18next";
 
-type ScanState = "idle" | "scanning" | "looking_up" | "found" | "not_found";
+type ScanState = "scanning" | "looking_up" | "found" | "not_found" | "error";
+
+const SCAN_FORMATS: BarcodeFormat[] = [
+  "qr_code",
+  "ean_13",
+  "ean_8",
+  "upc_a",
+  "upc_e",
+  "code_128",
+  "code_39",
+  "itf",
+  "data_matrix",
+];
 
 export default function Scan() {
   const { t } = useTranslation();
   const { isAuthenticated } = useAuth();
   const [, navigate] = useLocation();
-  const [state, setState] = useState<ScanState>("idle");
+  const [state, setState] = useState<ScanState>("scanning");
   const [error, setError] = useState<string | null>(null);
   const [scannedCode, setScannedCode] = useState<string | null>(null);
   const [resolvedProductId, setResolvedProductId] = useState<number | null>(null);
-  const scannerRef = useRef<Html5Qrcode | null>(null);
+  const processingRef = useRef(false);
 
   const lookupMutation = trpc.products.lookupByQR.useMutation({
     onSuccess: (product) => {
       setResolvedProductId(product.id);
       setState("found");
-
       if (isAuthenticated) {
         addToHistoryMutation.mutate({ productId: product.id });
       }
@@ -35,6 +47,7 @@ export default function Scan() {
     onError: (err) => {
       setState("not_found");
       toast.error(err.message || t("scan.productNotFound"));
+      processingRef.current = false;
     },
   });
 
@@ -44,107 +57,97 @@ export default function Scan() {
     },
   });
 
-  const startScanning = async () => {
-    try {
-      setError(null);
-      setState("scanning");
+  const handleScan = useCallback(
+    (detectedCodes: IDetectedBarcode[]) => {
+      if (processingRef.current || detectedCodes.length === 0) return;
+      const code = detectedCodes[0].rawValue;
+      if (!code) return;
 
-      const scanner = new Html5Qrcode("qr-reader");
-      scannerRef.current = scanner;
+      processingRef.current = true;
+      setScannedCode(code);
+      setState("looking_up");
+      lookupMutation.mutate({ payload: code });
+    },
+    [lookupMutation],
+  );
 
-      await scanner.start(
-        { facingMode: "environment" },
-        { fps: 10, qrbox: { width: 250, height: 250 } },
-        async (decodedText) => {
-          setScannedCode(decodedText);
-          stopScanning();
-          setState("looking_up");
-          lookupMutation.mutate({ payload: decodedText });
-        },
-        (errorMessage) => {
-          console.debug("QR scan error:", errorMessage);
-        },
-      );
-    } catch (err: unknown) {
-      const message = err instanceof Error ? err.message : t("scan.cameraFallback");
-      setError(message);
-      setState("idle");
-    }
-  };
+  const handleError = useCallback(
+    (err: unknown) => {
+      console.error("Scanner error:", err);
+      const raw =
+        err instanceof Error ? err.message : typeof err === "string" ? err : "";
+      const lower = raw.toLowerCase();
 
-  const stopScanning = async () => {
-    if (scannerRef.current) {
-      try {
-        await scannerRef.current.stop();
-        scannerRef.current.clear();
-        scannerRef.current = null;
-      } catch {
-        // ignore stop errors
+      if (lower.includes("notallowed") || lower.includes("permission")) {
+        setError(t("scan.cameraPermissionDenied"));
+      } else if (
+        lower.includes("notfound") ||
+        lower.includes("requested device not found")
+      ) {
+        setError(t("scan.cameraNotFound"));
+      } else if (
+        lower.includes("notreadable") ||
+        lower.includes("could not start")
+      ) {
+        setError(t("scan.cameraInUse"));
+      } else if (raw) {
+        setError(raw);
+      } else {
+        setError(t("scan.cameraFallback"));
       }
-    }
-    if (state === "scanning") {
-      setState("idle");
-    }
-  };
+      setState("error");
+    },
+    [t],
+  );
 
   const resetScan = () => {
     setScannedCode(null);
     setResolvedProductId(null);
     setError(null);
-    setState("idle");
+    processingRef.current = false;
+    setState("scanning");
   };
-
-  useEffect(() => {
-    return () => {
-      if (scannerRef.current) {
-        scannerRef.current.stop().catch(() => {});
-      }
-    };
-  }, []);
 
   return (
     <MobileLayout>
       <AppBar title={t("scan.title")} onBack={() => navigate("/")} />
 
       <div className="container py-6 space-y-6">
-        {/* Idle — start scanning prompt */}
-        {state === "idle" && !error && (
-          <Card className="p-8 elevation-1">
-            <div className="flex flex-col items-center text-center">
-              <div className="w-32 h-32 rounded-full bg-primary/10 flex items-center justify-center mb-4">
-                <Camera className="w-16 h-16 text-primary" />
-              </div>
-              <h2 className="title-large mb-2">{t("scan.idleTitle")}</h2>
-              <p className="body-medium text-muted-foreground mb-6">
-                {t("scan.idleDescription")}
+        {/* Sign-in hint for unauthenticated users */}
+        {!isAuthenticated && state === "scanning" && (
+          <Card className="p-4 elevation-1 bg-primary/5 border-primary/20">
+            <div className="flex items-center gap-3">
+              <LogIn className="w-5 h-5 text-primary flex-shrink-0" />
+              <p className="body-small text-muted-foreground flex-1">
+                {t("scan.signInHint")}
               </p>
               <Button
-                size="lg"
-                className="rounded-full w-full max-w-xs"
-                onClick={startScanning}
+                size="sm"
+                variant="outline"
+                className="rounded-full flex-shrink-0"
+                onClick={() => navigate("/login")}
               >
-                {t("scan.startScanning")}
+                {t("common.signIn")}
               </Button>
             </div>
           </Card>
         )}
 
         {/* Camera error */}
-        {error && (
+        {state === "error" && error && (
           <Card className="p-6 elevation-1 bg-destructive/10 border-destructive">
             <div className="flex items-start gap-3">
               <AlertCircle className="w-6 h-6 text-destructive flex-shrink-0 mt-0.5" />
               <div>
-                <h3 className="title-medium text-destructive mb-1">{t("scan.cameraError")}</h3>
+                <h3 className="title-medium text-destructive mb-1">
+                  {t("scan.cameraError")}
+                </h3>
                 <p className="body-medium text-destructive/90">{error}</p>
                 <Button
                   variant="outline"
                   size="sm"
                   className="mt-4"
-                  onClick={() => {
-                    setError(null);
-                    startScanning();
-                  }}
+                  onClick={resetScan}
                 >
                   {t("scan.tryAgain")}
                 </Button>
@@ -153,21 +156,28 @@ export default function Scan() {
           </Card>
         )}
 
-        {/* Active scanning */}
+        {/* Active scanning — camera starts automatically */}
         {state === "scanning" && (
-          <div className="space-y-4">
-            <Card className="p-4 elevation-2 overflow-hidden">
-              <div id="qr-reader" className="w-full rounded-lg overflow-hidden" />
-            </Card>
-            <div className="text-center">
-              <p className="body-medium text-muted-foreground mb-4">
-                {t("scan.positionHint")}
-              </p>
-              <Button variant="outline" onClick={stopScanning} className="rounded-full">
-                {t("scan.cancelScanning")}
-              </Button>
+          <Card className="overflow-hidden elevation-2">
+            <div className="aspect-[3/4] w-full">
+              <Scanner
+                formats={SCAN_FORMATS}
+                onScan={handleScan}
+                onError={handleError}
+                allowMultiple={false}
+                scanDelay={300}
+                components={{ finder: true, torch: true }}
+                styles={{ container: { width: "100%", height: "100%" } }}
+                constraints={{ facingMode: "environment" }}
+              />
             </div>
-          </div>
+          </Card>
+        )}
+
+        {state === "scanning" && (
+          <p className="body-medium text-muted-foreground text-center">
+            {t("scan.positionHint")}
+          </p>
         )}
 
         {/* Looking up product */}
@@ -177,7 +187,8 @@ export default function Scan() {
               <Loader2 className="w-10 h-10 animate-spin text-primary mb-4" />
               <h3 className="title-medium mb-2">{t("scan.lookingUp")}</h3>
               <p className="body-small text-muted-foreground">
-                {t("scan.code")} <span className="font-mono text-sm">{scannedCode}</span>
+                {t("scan.code")}{" "}
+                <span className="font-mono text-sm">{scannedCode}</span>
               </p>
             </div>
           </Card>
@@ -189,9 +200,12 @@ export default function Scan() {
             <div className="flex items-start gap-3">
               <CheckCircle className="w-6 h-6 text-accent flex-shrink-0 mt-0.5" />
               <div className="flex-1">
-                <h3 className="title-medium text-accent mb-1">{t("scan.productFound")}</h3>
+                <h3 className="title-medium text-accent mb-1">
+                  {t("scan.productFound")}
+                </h3>
                 <p className="body-small text-muted-foreground mb-4">
-                  {t("scan.code")} <span className="font-mono text-sm">{scannedCode}</span>
+                  {t("scan.code")}{" "}
+                  <span className="font-mono text-sm">{scannedCode}</span>
                 </p>
                 <div className="flex gap-2">
                   <Button
@@ -200,14 +214,7 @@ export default function Scan() {
                   >
                     {t("scan.viewProduct")}
                   </Button>
-                  <Button
-                    variant="outline"
-                    size="sm"
-                    onClick={() => {
-                      resetScan();
-                      startScanning();
-                    }}
-                  >
+                  <Button variant="outline" size="sm" onClick={resetScan}>
                     {t("scan.scanAnother")}
                   </Button>
                 </div>
@@ -222,24 +229,25 @@ export default function Scan() {
             <div className="flex items-start gap-3">
               <AlertCircle className="w-6 h-6 text-destructive flex-shrink-0 mt-0.5" />
               <div className="flex-1">
-                <h3 className="title-medium text-destructive mb-1">{t("scan.notFoundTitle")}</h3>
+                <h3 className="title-medium text-destructive mb-1">
+                  {t("scan.notFoundTitle")}
+                </h3>
                 <p className="body-medium text-muted-foreground mb-2">
                   {t("scan.notFoundDescription")}
                 </p>
                 <p className="body-small text-muted-foreground mb-4">
-                  {t("scan.code")} <span className="font-mono text-sm">{scannedCode}</span>
+                  {t("scan.code")}{" "}
+                  <span className="font-mono text-sm">{scannedCode}</span>
                 </p>
                 <div className="flex gap-2">
-                  <Button
-                    size="sm"
-                    onClick={() => {
-                      resetScan();
-                      startScanning();
-                    }}
-                  >
+                  <Button size="sm" onClick={resetScan}>
                     {t("scan.scanAgain")}
                   </Button>
-                  <Button variant="outline" size="sm" onClick={() => navigate("/")}>
+                  <Button
+                    variant="outline"
+                    size="sm"
+                    onClick={() => navigate("/")}
+                  >
                     {t("common.goHome")}
                   </Button>
                 </div>
@@ -249,7 +257,7 @@ export default function Scan() {
         )}
 
         {/* Instructions */}
-        {(state === "idle" || state === "scanning") && (
+        {state === "scanning" && (
           <Card className="p-6 elevation-1">
             <h3 className="title-medium mb-3">{t("scan.howToScan")}</h3>
             <ul className="space-y-2 body-medium text-muted-foreground">

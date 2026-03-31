@@ -10,6 +10,10 @@ describe("User Settings", () => {
     const settings = await caller.userSettings.get();
     expect(settings).toHaveProperty("language");
     expect(settings.language).toBe("en");
+    expect(settings).toHaveProperty("name");
+    expect(settings).toHaveProperty("email");
+    expect(settings.name).toBe("Test User");
+    expect(settings.email).toBe("test@example.com");
   });
 
   it("should update language setting", async () => {

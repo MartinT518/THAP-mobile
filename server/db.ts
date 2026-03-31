@@ -14,8 +14,11 @@ import {
   InsertScanHistory,
   InsertAiConversation,
   InsertAiProviderSetting,
-  InsertProductDocument
+  InsertProductDocument,
+  brandFeedItems,
+  productShares,
 } from "../drizzle/schema";
+import crypto from "crypto";
 import { ENV } from './_core/env';
 import { encrypt, decrypt } from './_core/crypto';
 
@@ -168,6 +171,22 @@ export async function getUserProductInstances(userId: number) {
   return result;
 }
 
+export async function isProductOwned(userId: number, productId: number): Promise<boolean> {
+  const db = await getDb();
+  if (!db) throw new Error("Database not available");
+
+  const result = await db
+    .select({ id: productInstances.id })
+    .from(productInstances)
+    .where(and(
+      eq(productInstances.userId, userId),
+      eq(productInstances.productId, productId)
+    ))
+    .limit(1);
+
+  return result.length > 0;
+}
+
 export async function getProductInstanceById(instanceId: number, userId: number) {
   const db = await getDb();
   if (!db) return undefined;
@@ -186,6 +205,153 @@ export async function getProductInstanceById(instanceId: number, userId: number)
     .limit(1);
 
   return result.length > 0 ? result[0] : undefined;
+}
+
+function normalizeTagName(tag: unknown): string | null {
+  if (typeof tag !== "string") return null;
+  const normalized = tag.trim();
+  return normalized.length > 0 ? normalized : null;
+}
+
+function normalizeTagList(tags: unknown): string[] {
+  if (!Array.isArray(tags)) return [];
+  const seen = new Set<string>();
+  const normalized: string[] = [];
+
+  for (const value of tags) {
+    const tag = normalizeTagName(value);
+    if (!tag || seen.has(tag)) continue;
+    seen.add(tag);
+    normalized.push(tag);
+  }
+
+  return normalized;
+}
+
+export async function getUserTagsWithCounts(userId: number) {
+  const db = await getDb();
+  if (!db) return [];
+
+  const rows = await db
+    .select({
+      tags: productInstances.tags,
+    })
+    .from(productInstances)
+    .where(eq(productInstances.userId, userId));
+
+  const counts = new Map<string, number>();
+
+  for (const row of rows) {
+    for (const tag of normalizeTagList(row.tags)) {
+      counts.set(tag, (counts.get(tag) ?? 0) + 1);
+    }
+  }
+
+  const orderRow = await db
+    .select({ tagOrder: users.tagOrder })
+    .from(users)
+    .where(eq(users.id, userId))
+    .limit(1);
+
+  const storedOrder: string[] = orderRow[0]?.tagOrder ?? [];
+  const orderIndex = new Map(storedOrder.map((t, i) => [t, i]));
+
+  return Array.from(counts.entries())
+    .map(([name, count]) => ({ name, count }))
+    .sort((a, b) => {
+      const ai = orderIndex.get(a.name);
+      const bi = orderIndex.get(b.name);
+      if (ai !== undefined && bi !== undefined) return ai - bi;
+      if (ai !== undefined) return -1;
+      if (bi !== undefined) return 1;
+      return a.name.localeCompare(b.name, undefined, { sensitivity: "base" });
+    });
+}
+
+export async function renameTag(userId: number, oldName: string, newName: string) {
+  const db = await getDb();
+  if (!db) throw new Error("Database not available");
+
+  const oldTag = normalizeTagName(oldName);
+  const nextTag = normalizeTagName(newName);
+
+  if (!oldTag || !nextTag || oldTag === nextTag) return;
+
+  const rows = await db
+    .select({
+      id: productInstances.id,
+      tags: productInstances.tags,
+    })
+    .from(productInstances)
+    .where(eq(productInstances.userId, userId));
+
+  for (const row of rows) {
+    const currentTags = normalizeTagList(row.tags);
+    if (!currentTags.includes(oldTag)) continue;
+
+    const seen = new Set<string>();
+    const updatedTags: string[] = [];
+
+    for (const tag of currentTags) {
+      const resolvedTag = tag === oldTag ? nextTag : tag;
+      if (seen.has(resolvedTag)) continue;
+      seen.add(resolvedTag);
+      updatedTags.push(resolvedTag);
+    }
+
+    await db
+      .update(productInstances)
+      .set({
+        tags: updatedTags,
+        updatedAt: new Date(),
+      })
+      .where(and(eq(productInstances.id, row.id), eq(productInstances.userId, userId)));
+  }
+}
+
+export async function deleteTag(userId: number, tagName: string) {
+  const db = await getDb();
+  if (!db) throw new Error("Database not available");
+
+  const normalizedTag = normalizeTagName(tagName);
+  if (!normalizedTag) return;
+
+  const rows = await db
+    .select({
+      id: productInstances.id,
+      tags: productInstances.tags,
+    })
+    .from(productInstances)
+    .where(eq(productInstances.userId, userId));
+
+  for (const row of rows) {
+    const currentTags = normalizeTagList(row.tags);
+    if (!currentTags.includes(normalizedTag)) continue;
+
+    const updatedTags = currentTags.filter((tag) => tag !== normalizedTag);
+
+    await db
+      .update(productInstances)
+      .set({
+        tags: updatedTags,
+        updatedAt: new Date(),
+      })
+      .where(and(eq(productInstances.id, row.id), eq(productInstances.userId, userId)));
+  }
+}
+
+export async function reorderTags(userId: number, orderedNames: string[]) {
+  const db = await getDb();
+  if (!db) throw new Error("Database not available");
+
+  const normalized = orderedNames
+    .map(normalizeTagName)
+    .filter((t): t is string => t !== null);
+
+  await db
+    .update(users)
+    .set({ tagOrder: normalized, updatedAt: new Date() })
+    .where(eq(users.id, userId));
 }
 
 export async function deleteProductInstance(instanceId: number, userId: number) {
@@ -278,14 +444,6 @@ export async function getActiveAiProvider(userId: number) {
 }
 
 // AI conversation functions
-export async function createAiConversation(conversation: InsertAiConversation) {
-  const db = await getDb();
-  if (!db) throw new Error("Database not available");
-
-  const result = await db.insert(aiConversations).values(conversation);
-  return result;
-}
-
 export async function updateAiConversation(conversationId: number, messages: InsertAiConversation['messages']) {
   const db = await getDb();
   if (!db) throw new Error("Database not available");
@@ -488,6 +646,28 @@ export async function getUserFeedData(userId: number) {
   return { instances, history };
 }
 
+/** Normalize product.brand for matching curated `brand_feed_items.brandKey`. */
+export function normalizeBrandKey(brand: string | null | undefined): string | null {
+  if (!brand) return null;
+  const k = brand.trim().toLowerCase();
+  return k.length > 0 ? k : null;
+}
+
+export async function getBrandFeedItemsForBrands(brandKeys: string[], limit: number) {
+  if (brandKeys.length === 0) return [];
+  const db = await getDb();
+  if (!db) return [];
+
+  const rows = await db
+    .select()
+    .from(brandFeedItems)
+    .where(inArray(brandFeedItems.brandKey, brandKeys))
+    .orderBy(desc(brandFeedItems.publishedAt))
+    .limit(limit);
+
+  return rows;
+}
+
 // Search product by barcode or productId string
 export async function searchProductByIdentifier(identifier: string) {
   const db = await getDb();
@@ -505,6 +685,27 @@ export async function searchProductByIdentifier(identifier: string) {
     .limit(1);
 
   return result.length > 0 ? result[0] : undefined;
+}
+
+export async function searchProductsByName(query: string, limit = 10) {
+  const db = await getDb();
+  if (!db) return [];
+
+  const pattern = `%${query}%`;
+  const result = await db
+    .select()
+    .from(products)
+    .where(
+      or(
+        like(products.name, pattern),
+        like(products.brand, pattern),
+        like(products.model, pattern),
+        like(products.category, pattern),
+      )
+    )
+    .limit(limit);
+
+  return result;
 }
 
 // Delete a single scan history entry
@@ -567,10 +768,152 @@ export async function deleteUserAccount(userId: number) {
   const db = await getDb();
   if (!db) throw new Error("Database not available");
 
+  await db.delete(productShares).where(
+    or(
+      eq(productShares.senderUserId, userId),
+      eq(productShares.receiverUserId, userId),
+    )
+  );
   await db.delete(productDocuments).where(eq(productDocuments.userId, userId));
   await db.delete(aiConversations).where(eq(aiConversations.userId, userId));
   await db.delete(aiProviderSettings).where(eq(aiProviderSettings.userId, userId));
   await db.delete(scanHistory).where(eq(scanHistory.userId, userId));
   await db.delete(productInstances).where(eq(productInstances.userId, userId));
   await db.delete(users).where(eq(users.id, userId));
+}
+
+// Product sharing functions
+export async function createProductShare(productInstanceId: number, senderUserId: number) {
+  const db = await getDb();
+  if (!db) throw new Error("Database not available");
+
+  const shareToken = crypto.randomUUID();
+  await db.insert(productShares).values({
+    productInstanceId,
+    senderUserId,
+    shareToken,
+  });
+
+  const result = await db
+    .select()
+    .from(productShares)
+    .where(eq(productShares.shareToken, shareToken))
+    .limit(1);
+
+  return result[0];
+}
+
+export async function getShareByToken(token: string) {
+  const db = await getDb();
+  if (!db) return undefined;
+
+  const result = await db
+    .select({
+      share: productShares,
+      product: products,
+      instance: productInstances,
+      senderName: users.name,
+    })
+    .from(productShares)
+    .innerJoin(productInstances, eq(productShares.productInstanceId, productInstances.id))
+    .innerJoin(products, eq(productInstances.productId, products.id))
+    .innerJoin(users, eq(productShares.senderUserId, users.id))
+    .where(eq(productShares.shareToken, token))
+    .limit(1);
+
+  return result.length > 0 ? result[0] : undefined;
+}
+
+export async function acceptShare(shareId: number, receiverUserId: number) {
+  const db = await getDb();
+  if (!db) throw new Error("Database not available");
+
+  await db
+    .update(productShares)
+    .set({
+      status: "accepted",
+      receiverUserId,
+      acceptedAt: new Date(),
+    })
+    .where(
+      and(
+        eq(productShares.id, shareId),
+        eq(productShares.status, "pending"),
+      )
+    );
+}
+
+export async function dismissShare(shareId: number) {
+  const db = await getDb();
+  if (!db) throw new Error("Database not available");
+
+  await db
+    .update(productShares)
+    .set({ status: "dismissed" })
+    .where(
+      and(
+        eq(productShares.id, shareId),
+        eq(productShares.status, "pending"),
+      )
+    );
+}
+
+export async function getSharedWithMe(userId: number) {
+  const db = await getDb();
+  if (!db) return [];
+
+  const result = await db
+    .select({
+      share: productShares,
+      product: products,
+      instance: productInstances,
+      senderName: users.name,
+    })
+    .from(productShares)
+    .innerJoin(productInstances, eq(productShares.productInstanceId, productInstances.id))
+    .innerJoin(products, eq(productInstances.productId, products.id))
+    .innerJoin(users, eq(productShares.senderUserId, users.id))
+    .where(
+      and(
+        eq(productShares.receiverUserId, userId),
+        eq(productShares.status, "accepted"),
+      )
+    )
+    .orderBy(desc(productShares.acceptedAt));
+
+  return result;
+}
+
+export async function getMyOutgoingShares(userId: number) {
+  const db = await getDb();
+  if (!db) return [];
+
+  const result = await db
+    .select({
+      share: productShares,
+      product: products,
+      instance: productInstances,
+    })
+    .from(productShares)
+    .innerJoin(productInstances, eq(productShares.productInstanceId, productInstances.id))
+    .innerJoin(products, eq(productInstances.productId, products.id))
+    .where(eq(productShares.senderUserId, userId))
+    .orderBy(desc(productShares.createdAt));
+
+  return result;
+}
+
+export async function revokeShare(shareId: number, senderUserId: number) {
+  const db = await getDb();
+  if (!db) throw new Error("Database not available");
+
+  await db
+    .delete(productShares)
+    .where(
+      and(
+        eq(productShares.id, shareId),
+        eq(productShares.senderUserId, senderUserId),
+        eq(productShares.status, "pending"),
+      )
+    );
 }

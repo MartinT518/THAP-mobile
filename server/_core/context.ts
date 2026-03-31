@@ -1,6 +1,7 @@
 import type { CreateExpressContextOptions } from "@trpc/server/adapters/express";
 import type { User } from "../../drizzle/schema";
-import { sdk } from "./sdk";
+import { tryDevAuth } from "./devAuth";
+import { googleAuth } from "./googleAuth";
 
 export type TrpcContext = {
   req: CreateExpressContextOptions["req"];
@@ -11,12 +12,20 @@ export type TrpcContext = {
 export async function createContext(
   opts: CreateExpressContextOptions
 ): Promise<TrpcContext> {
+  const devUser = await tryDevAuth(opts.req);
+  if (devUser) {
+    return {
+      req: opts.req,
+      res: opts.res,
+      user: devUser,
+    };
+  }
+
   let user: User | null = null;
 
   try {
-    user = await sdk.authenticateRequest(opts.req);
-  } catch (error) {
-    // Authentication is optional for public procedures.
+    user = await googleAuth.authenticateRequest(opts.req);
+  } catch {
     user = null;
   }
 

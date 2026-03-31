@@ -2,13 +2,241 @@ import { COOKIE_NAME, AXIOS_TIMEOUT_MS } from "@shared/const";
 import { getSessionCookieOptions } from "./_core/cookies";
 import { systemRouter } from "./_core/systemRouter";
 import { publicProcedure, protectedProcedure, router } from "./_core/trpc";
+import { defaultChatModel, openAiCompatibleChatUrl } from "./_core/aiProviders";
+import { ENV } from "./_core/env";
 import { invokeLLM } from "./_core/llm";
 import { TRPCError } from "@trpc/server";
 import { z } from "zod";
-import axios from "axios";
+import axios, { isAxiosError } from "axios";
+import type { FeedItem, RegistrationForm, RegistrationFormField } from "@shared/types";
+import type { InsertProduct } from "../drizzle/schema";
 import * as db from "./db";
+import * as icecat from "./icecat";
+import { createScrapedProductId, scrapeOpenGraphUrl } from "./opengraph";
+import { parseLegacyTingsDeepLink } from "./deeplinkTings";
 
-const TINGS_API_BASE = "https://tingsapi.test.mindworks.ee";
+function safeHttpUrl(url: string | null | undefined): string | undefined {
+  if (!url?.trim()) return undefined;
+  try {
+    const u = new URL(url.trim());
+    if (u.protocol === "http:" || u.protocol === "https:") return u.href;
+  } catch {
+    return undefined;
+  }
+  return undefined;
+}
+
+function tingsV2RequestHeaders(): Record<string, string> | undefined {
+  const t = ENV.tingsApiBearerToken;
+  return t ? { Authorization: `Bearer ${t}` } : undefined;
+}
+
+/** Map Tings `/api/v2/products/*` JSON (see legacy app `ProductItem`) into our `products` row. */
+function mapTingsV2ResponseToProduct(data: unknown): InsertProduct | null {
+  if (!data || typeof data !== "object") return null;
+  const d = data as Record<string, unknown>;
+  if (typeof d.id !== "string" || !d.id.trim()) return null;
+  const name =
+    typeof d.name === "string" && d.name.trim()
+      ? d.name.trim()
+      : "Unknown Product";
+  const brand =
+    typeof d.brand === "string" && d.brand.trim() ? d.brand.trim() : null;
+  const barcode = typeof d.barcode === "string" ? d.barcode : null;
+  const imageUrl = typeof d.imageUrl === "string" ? d.imageUrl : null;
+  const description =
+    typeof d.description === "string" && d.description.trim()
+      ? d.description.trim()
+      : undefined;
+
+  const images = Array.isArray(d.images)
+    ? (d.images as unknown[]).filter((u): u is string => typeof u === "string" && u.startsWith("http"))
+    : undefined;
+  const videos = Array.isArray(d.videos)
+    ? (d.videos as unknown[]).filter((u): u is string => typeof u === "string" && u.startsWith("http"))
+    : undefined;
+  const htmlContent = Array.isArray(d.contentBlocks)
+    ? (d.contentBlocks as unknown[])
+        .filter((b): b is Record<string, unknown> => !!b && typeof b === "object")
+        .map((b) => ({
+          title: typeof b.title === "string" ? b.title : undefined,
+          body: typeof b.body === "string" ? b.body : "",
+        }))
+        .filter((b) => b.body.trim().length > 0)
+    : undefined;
+
+  const metadata: NonNullable<InsertProduct["metadata"]> = {};
+  if (description) metadata.description = description;
+  if (images?.length) metadata.images = images;
+  if (videos?.length) metadata.videos = videos;
+  if (htmlContent?.length) metadata.htmlContent = htmlContent;
+
+  return {
+    productId: d.id.trim(),
+    name,
+    brand,
+    model: null,
+    category: null,
+    imageUrl,
+    barcode,
+    metadata: Object.keys(metadata).length > 0 ? metadata : null,
+  };
+}
+
+function parseBoolish(v: unknown): boolean {
+  if (typeof v === "boolean") return v;
+  if (typeof v === "string") {
+    const s = v.toLowerCase();
+    return s === "true" || s === "1" || s === "yes";
+  }
+  return false;
+}
+
+function mapTingsRegistrationFieldType(dataType: string): RegistrationFormField["type"] | null {
+  switch (dataType) {
+    case "text":
+    case "email":
+    case "textarea":
+    case "date":
+    case "country":
+      return dataType;
+    case "numeric":
+      return "text";
+    default:
+      return null;
+  }
+}
+
+/** Parses Tings registration form JSON (legacy `ProductFormModel` / `formFields`). */
+export function parseTingsRegistrationForm(
+  productId: string,
+  raw: unknown,
+): RegistrationForm | null {
+  if (!raw || typeof raw !== "object") return null;
+  const o = raw as Record<string, unknown>;
+  const title = typeof o.title === "string" ? o.title.trim() : "";
+  const formFields = o.formFields;
+  if (!title || !Array.isArray(formFields) || formFields.length === 0) return null;
+
+  const fields: RegistrationFormField[] = [];
+  for (const item of formFields) {
+    if (!item || typeof item !== "object") continue;
+    const f = item as Record<string, unknown>;
+    const label = typeof f.label === "string" ? f.label.trim() : "";
+    const dt =
+      typeof f.dataType === "string" ? mapTingsRegistrationFieldType(f.dataType) : null;
+    if (!label || !dt) continue;
+
+    const prefilledHint =
+      typeof f.prefilledValue === "string" && f.prefilledValue.length > 0
+        ? f.prefilledValue
+        : undefined;
+
+    fields.push({
+      key: label,
+      label,
+      type: dt,
+      required: parseBoolish(f.required),
+      prefilledHint,
+    });
+  }
+
+  if (fields.length === 0) return null;
+
+  const description =
+    typeof o.description === "string" && o.description.trim()
+      ? o.description.trim()
+      : undefined;
+
+  return { productId, title, description, fields };
+}
+
+function normalizeRegistrationFormData(
+  formData: Record<string, unknown>,
+): Array<{ key: string; value: string | null }> {
+  const maxKeys = 80;
+  const maxValLen = 8000;
+  return Object.entries(formData)
+    .slice(0, maxKeys)
+    .map(([key, value]) => {
+      if (value === null || value === undefined) return { key, value: null };
+      let s = typeof value === "string" ? value : String(value);
+      if (s.length > maxValLen) s = s.slice(0, maxValLen);
+      return { key, value: s };
+    });
+}
+
+/**
+ * Legacy QR / deep links: `id.tings.info/{id}`, `qr.tings.info/...`, and `*.thap.info` variants.
+ */
+async function tryResolveLegacyTingsDeepLink(payload: string) {
+  const link = parseLegacyTingsDeepLink(payload);
+  if (!link) return undefined;
+
+  const base = ENV.tingsApiBase;
+  const headers = tingsV2RequestHeaders();
+
+  if (link.kind === "id") {
+    const local = await db.searchProductByIdentifier(link.externalId);
+    if (local) return local;
+    try {
+      const { data, status } = await axios.get(
+        `${base}/api/v2/products/${encodeURIComponent(link.externalId)}`,
+        { timeout: AXIOS_TIMEOUT_MS, headers, validateStatus: () => true },
+      );
+      if (status >= 200 && status < 300) {
+        const row = mapTingsV2ResponseToProduct(data);
+        if (row) {
+          await db.upsertProduct(row);
+          const stored = await db.getProductByProductId(row.productId);
+          if (stored) return stored;
+        }
+      }
+    } catch {
+      // continue to standard lookup
+    }
+    return undefined;
+  }
+
+  try {
+    const { data, status } = await axios.get(`${base}/api/v2/products/find`, {
+      params: { qrUrl: link.qrUrl },
+      timeout: AXIOS_TIMEOUT_MS,
+      headers,
+      validateStatus: () => true,
+    });
+    if (status >= 200 && status < 300) {
+      const row = mapTingsV2ResponseToProduct(data);
+      if (row) {
+        await db.upsertProduct(row);
+        const stored = await db.getProductByProductId(row.productId);
+        if (stored) return stored;
+      }
+    }
+  } catch {
+    // continue
+  }
+  return undefined;
+}
+
+async function upsertIcecatProduct(product: icecat.IcecatProduct) {
+  const metadata: NonNullable<InsertProduct["metadata"]> = {};
+  const desc = product.description ?? product.shortDescription ?? undefined;
+  if (desc) metadata.description = desc;
+  if (Object.keys(product.specifications).length > 0) metadata.specifications = product.specifications;
+  if (product.galleryImages.length > 0) metadata.images = product.galleryImages;
+
+  await db.upsertProduct({
+    productId: `icecat-${product.icecatId}`,
+    name: product.title || product.name,
+    brand: product.brand || null,
+    model: null,
+    category: product.category || null,
+    imageUrl: product.imageUrl,
+    barcode: product.barcode ?? null,
+    metadata: Object.keys(metadata).length > 0 ? metadata : null,
+  });
+}
 
 export const appRouter = router({
   system: systemRouter,
@@ -116,10 +344,144 @@ export const appRouter = router({
         return { success: true };
       }),
 
+    /** Proxy to Tings: POST /api/v2/products/feedback/{productId} */
+    sendFeedback: protectedProcedure
+      .input(
+        z.object({
+          productId: z.string().min(1).max(255),
+          feedback: z.string().min(1).max(5000),
+          name: z.string().max(200).optional(),
+          email: z.union([z.string().email(), z.literal("")]).optional(),
+        }),
+      )
+      .mutation(async ({ input }) => {
+        const name = input.name?.trim() || undefined;
+        const email =
+          input.email === undefined || input.email === "" ? undefined : input.email;
+        const base = ENV.tingsApiBase.replace(/\/$/, "");
+        const url = `${base}/api/v2/products/feedback/${encodeURIComponent(input.productId)}`;
+        const headers = tingsV2RequestHeaders();
+        try {
+          await axios.post(
+            url,
+            {
+              feedback: input.feedback.trim(),
+              ...(name !== undefined && { name }),
+              ...(email !== undefined && { email }),
+            },
+            { timeout: AXIOS_TIMEOUT_MS, ...(headers ? { headers } : {}) },
+          );
+        } catch (err: unknown) {
+          const msg = isAxiosError(err)
+            ? typeof err.response?.data === "object" &&
+                err.response?.data !== null &&
+                "message" in err.response.data &&
+                typeof (err.response.data as { message?: unknown }).message === "string"
+              ? (err.response.data as { message: string }).message
+              : err.response?.status
+                ? `Tings API error (${err.response.status})`
+                : err.message
+            : "Feedback request failed";
+          throw new TRPCError({
+            code: "BAD_GATEWAY",
+            message: msg,
+          });
+        }
+        return { success: true as const };
+      }),
+
+    /**
+     * Manufacturer registration form: GET Tings `.../api/v2/products/registration_form/{productId}`
+     * (legacy path `/v2/products/registration_form/`).
+     */
+    getRegistrationForm: protectedProcedure
+      .input(z.object({ productId: z.string().min(1).max(255) }))
+      .query(async ({ input }) => {
+        const base = ENV.tingsApiBase.replace(/\/$/, "");
+        const url = `${base}/api/v2/products/registration_form/${encodeURIComponent(input.productId)}`;
+        const headers = tingsV2RequestHeaders();
+        try {
+          const { data, status } = await axios.get(url, {
+            timeout: AXIOS_TIMEOUT_MS,
+            ...(headers ? { headers } : {}),
+            validateStatus: () => true,
+          });
+          if (status === 404) return null;
+          if (status < 200 || status >= 300) {
+            throw new TRPCError({
+              code: "BAD_GATEWAY",
+              message: `Registration form unavailable (${status})`,
+            });
+          }
+          return parseTingsRegistrationForm(input.productId, data);
+        } catch (err: unknown) {
+          if (err instanceof TRPCError) throw err;
+          if (isAxiosError(err) && err.response?.status === 404) return null;
+          const msg = isAxiosError(err) ? err.message : "Registration form request failed";
+          throw new TRPCError({ code: "BAD_GATEWAY", message: msg });
+        }
+      }),
+
+    /**
+     * Submit manufacturer registration: POST Tings `.../api/v2/tings/{instanceId}/register`
+     * with body `{ registrationData: [{ key, value }] }`.
+     */
+    registerProduct: protectedProcedure
+      .input(
+        z.object({
+          productInstanceId: z.number().int().positive(),
+          formData: z.record(z.string(), z.unknown()),
+        }),
+      )
+      .mutation(async ({ ctx, input }) => {
+        const row = await db.getProductInstanceById(input.productInstanceId, ctx.user.id);
+        if (!row) {
+          throw new TRPCError({
+            code: "NOT_FOUND",
+            message: "Product instance not found",
+          });
+        }
+
+        const base = ENV.tingsApiBase.replace(/\/$/, "");
+        const url = `${base}/api/v2/tings/${encodeURIComponent(String(input.productInstanceId))}/register`;
+        const headers = tingsV2RequestHeaders();
+        const body = {
+          registrationData: normalizeRegistrationFormData(input.formData),
+        };
+
+        try {
+          const { status } = await axios.post(url, body, {
+            timeout: AXIOS_TIMEOUT_MS,
+            ...(headers ? { headers } : {}),
+            validateStatus: () => true,
+          });
+          if (status < 200 || status >= 300) {
+            const message =
+              status === 404
+                ? "Registration endpoint not found for this product instance."
+                : `Registration failed (${status})`;
+            throw new TRPCError({ code: "BAD_GATEWAY", message });
+          }
+        } catch (err: unknown) {
+          if (err instanceof TRPCError) throw err;
+          const msg = isAxiosError(err)
+            ? err.response?.status
+              ? `Tings API error (${err.response.status})`
+              : err.message
+            : "Registration request failed";
+          throw new TRPCError({ code: "BAD_GATEWAY", message: msg });
+        }
+
+        return { success: true as const };
+      }),
+
     lookupByQR: protectedProcedure
       .input(z.object({ payload: z.string().min(1).max(2000) }))
       .mutation(async ({ input }) => {
         const { payload } = input;
+
+        const fromLegacyHost = await tryResolveLegacyTingsDeepLink(payload);
+        if (fromLegacyHost) return fromLegacyHost;
 
         // 1. Try to parse as a known Thap product URL (e.g. .../product/PRODUCT_ID)
         const thapMatch = payload.match(/\/product\/([^/?#]+)/);
@@ -150,7 +512,7 @@ export const appRouter = router({
         // 4. Try external API lookup
         try {
           const { data: externalProduct } = await axios.get(
-            `${TINGS_API_BASE}/api/products/search`,
+            `${ENV.tingsApiBase}/api/products/search`,
             {
               params: { q: payload },
               timeout: AXIOS_TIMEOUT_MS,
@@ -176,10 +538,149 @@ export const appRouter = router({
           // External API unavailable — fall through to not-found
         }
 
+        const icecatProduct = await icecat.lookupByGtin(payload);
+        if (icecatProduct) {
+          await upsertIcecatProduct(icecatProduct);
+          const stored = await db.getProductByProductId(`icecat-${icecatProduct.icecatId}`);
+          if (stored) return stored;
+        }
+
         throw new TRPCError({
           code: "NOT_FOUND",
           message: "Product not found. The scanned code did not match any known product.",
         });
+      }),
+
+    searchExternal: protectedProcedure
+      .input(z.object({ query: z.string().min(2).max(200), lang: z.string().max(5).default("EN") }))
+      .mutation(async ({ input }) => {
+        const query = input.query.trim();
+        const isBarcode = /^\d{8,}$/.test(query);
+
+        const localByIdentifier = await db.searchProductByIdentifier(query);
+        if (localByIdentifier) {
+          return { products: [localByIdentifier], source: "local" as const };
+        }
+
+        if (!isBarcode) {
+          const localByName = await db.searchProductsByName(query);
+          if (localByName.length > 0) {
+            return { products: localByName, source: "local" as const };
+          }
+        }
+
+        if (!isBarcode) {
+          try {
+            const { data: externalProduct } = await axios.get(
+              `${ENV.tingsApiBase}/api/products/search`,
+              { params: { q: query }, timeout: AXIOS_TIMEOUT_MS },
+            );
+
+            if (externalProduct && externalProduct.id) {
+              await db.upsertProduct({
+                productId: String(externalProduct.id),
+                name: externalProduct.name ?? "Unknown Product",
+                brand: externalProduct.brand ?? null,
+                model: externalProduct.model ?? null,
+                category: externalProduct.category ?? null,
+                imageUrl: externalProduct.imageUrl ?? null,
+                barcode: externalProduct.barcode ?? null,
+                metadata: externalProduct.metadata ?? null,
+              });
+
+              const stored = await db.getProductByProductId(String(externalProduct.id));
+              if (stored) return { products: [stored], source: "tings" as const };
+            }
+          } catch {
+            // Tings unavailable — continue
+          }
+        }
+
+        if (isBarcode) {
+          const icecatProduct = await icecat.lookupByGtin(query);
+          if (icecatProduct) {
+            await upsertIcecatProduct(icecatProduct);
+            const stored = await db.getProductByProductId(`icecat-${icecatProduct.icecatId}`);
+            if (stored) return { products: [stored], source: "icecat" as const };
+          }
+        }
+
+        throw new TRPCError({
+          code: "NOT_FOUND",
+          message: isBarcode
+            ? "No product found for this barcode."
+            : "No product found matching your search.",
+        });
+      }),
+
+    scrapeUrl: protectedProcedure
+      .input(z.object({ url: z.string().url().max(2000) }))
+      .mutation(async ({ input }) => {
+        const scraped = await scrapeOpenGraphUrl(input.url);
+        const productId = createScrapedProductId(scraped.url);
+
+        await db.upsertProduct({
+          productId,
+          name: scraped.title,
+          brand: scraped.siteName ?? null,
+          model: null,
+          category: null,
+          imageUrl: scraped.imageUrl ?? null,
+          barcode: null,
+          metadata: scraped.description
+            ? { description: scraped.description }
+            : null,
+        });
+
+        const product = await db.getProductByProductId(productId);
+        if (!product) {
+          throw new TRPCError({
+            code: "INTERNAL_SERVER_ERROR",
+            message: "Failed to store scraped product.",
+          });
+        }
+
+        return { product, scraped };
+      }),
+  }),
+
+  tags: router({
+    list: protectedProcedure.query(async ({ ctx }) => {
+      return db.getUserTagsWithCounts(ctx.user.id);
+    }),
+
+    rename: protectedProcedure
+      .input(
+        z.object({
+          oldName: z.string().trim().min(1).max(100),
+          newName: z.string().trim().min(1).max(100),
+        }),
+      )
+      .mutation(async ({ ctx, input }) => {
+        await db.renameTag(ctx.user.id, input.oldName, input.newName);
+        return { success: true as const };
+      }),
+
+    delete: protectedProcedure
+      .input(
+        z.object({
+          name: z.string().trim().min(1).max(100),
+        }),
+      )
+      .mutation(async ({ ctx, input }) => {
+        await db.deleteTag(ctx.user.id, input.name);
+        return { success: true as const };
+      }),
+
+    reorder: protectedProcedure
+      .input(
+        z.object({
+          orderedNames: z.array(z.string().trim().min(1).max(100)).max(500),
+        }),
+      )
+      .mutation(async ({ ctx, input }) => {
+        await db.reorderTags(ctx.user.id, input.orderedNames);
+        return { success: true as const };
       }),
   }),
 
@@ -249,8 +750,10 @@ export const appRouter = router({
   userSettings: router({
     get: protectedProcedure.query(async ({ ctx }) => {
       return {
-        language: ctx.user.languageCode || 'en',
+        language: ctx.user.languageCode || "en",
         country: ctx.user.countryCode || null,
+        name: ctx.user.name ?? null,
+        email: ctx.user.email ?? null,
       };
     }),
 
@@ -291,11 +794,16 @@ export const appRouter = router({
     add: protectedProcedure
       .input(z.object({ productId: z.number() }))
       .mutation(async ({ ctx, input }) => {
-        await db.addToScanHistory({
-          userId: ctx.user.id,
-          productId: input.productId,
-        });
-        return { success: true };
+        const isOwned = await db.isProductOwned(ctx.user.id, input.productId);
+
+        if (!isOwned) {
+          await db.addToScanHistory({
+            userId: ctx.user.id,
+            productId: input.productId,
+          });
+        }
+
+        return { success: true, recorded: !isOwned };
       }),
 
     delete: protectedProcedure
@@ -384,6 +892,20 @@ export const appRouter = router({
           throw new TRPCError({ code: "NOT_FOUND", message: "Product not found" });
         }
 
+        const activeProvider = await db.getActiveAiProvider(ctx.user.id);
+        const hasByok = Boolean(activeProvider?.apiKey?.trim());
+        const hasServerLlm =
+          ENV.servicesBaseUrl.trim().length > 0 &&
+          ENV.servicesApiKey.trim().length > 0;
+
+        if (!hasByok && !hasServerLlm) {
+          throw new TRPCError({
+            code: "PRECONDITION_FAILED",
+            message:
+              "No AI credentials: add an API key in Settings and mark the provider as active, or set THAP_SERVICES_BASE_URL and THAP_SERVICES_API_KEY on the server.",
+          });
+        }
+
         let conversationId = input.conversationId;
         let existingMessages: Array<{ role: "user" | "assistant" | "system"; content: string; timestamp: number }> = [];
 
@@ -427,7 +949,34 @@ export const appRouter = router({
           { role: "user" as const, content: input.message },
         ];
 
-        const result = await invokeLLM({ messages: llmMessages });
+        const llmProviderLabel =
+          hasByok && activeProvider ? activeProvider.provider : "forge";
+
+        let result: Awaited<ReturnType<typeof invokeLLM>>;
+        try {
+          if (hasByok && activeProvider) {
+            result = await invokeLLM({
+              messages: llmMessages,
+              openAiCompatUrl: openAiCompatibleChatUrl(activeProvider.provider),
+              bearerToken: activeProvider.apiKey,
+              model: defaultChatModel(activeProvider.provider),
+            });
+          } else {
+            result = await invokeLLM({ messages: llmMessages });
+          }
+        } catch (e) {
+          const msg = e instanceof Error ? e.message : String(e);
+          if (
+            msg.includes("THAP_SERVICES_BASE_URL") ||
+            msg.includes("THAP_SERVICES_API_KEY")
+          ) {
+            throw new TRPCError({
+              code: "PRECONDITION_FAILED",
+              message: msg,
+            });
+          }
+          throw e;
+        }
 
         const choice = result.choices[0];
         if (!choice) {
@@ -454,7 +1003,7 @@ export const appRouter = router({
         } else {
           conversationId = await db.createAiConversationReturningId({
             userId: ctx.user.id,
-            provider: "forge",
+            provider: llmProviderLabel,
             productId: input.productId,
             messages: updatedMessages,
           });
@@ -467,20 +1016,11 @@ export const appRouter = router({
       }),
   }),
 
-  // Feed — dynamic activity feed
+  // Feed — brand news/commercials for owned brands + activity
   feed: router({
     list: protectedProcedure.query(async ({ ctx }) => {
       const { instances, history } = await db.getUserFeedData(ctx.user.id);
-      const items: Array<{
-        id: string;
-        type: "product_added" | "product_scanned" | "warranty_alert" | "care_tip" | "sustainability_insight";
-        title: string;
-        content: string;
-        timestamp: string;
-        productId?: number;
-        productName?: string;
-        productImageUrl?: string | null;
-      }> = [];
+      const items: FeedItem[] = [];
 
       const now = Date.now();
       const DAY_MS = 86_400_000;
@@ -562,8 +1102,122 @@ export const appRouter = router({
         });
       }
 
+      const brandDisplayByKey = new Map<string, string>();
+      const brandKeySet = new Set<string>();
+      for (const row of instances) {
+        const name = row.product?.brand;
+        if (!name) continue;
+        const key = db.normalizeBrandKey(name);
+        if (!key) continue;
+        brandKeySet.add(key);
+        if (!brandDisplayByKey.has(key)) {
+          brandDisplayByKey.set(key, name.trim());
+        }
+      }
+
+      const curated = await db.getBrandFeedItemsForBrands(Array.from(brandKeySet), 40);
+      for (const row of curated) {
+        const link = safeHttpUrl(row.linkUrl);
+        items.push({
+          id: `brand-${row.kind}-${row.id}`,
+          type: row.kind === "news" ? "brand_news" : "brand_commercial",
+          title: row.title,
+          content: row.summary,
+          timestamp: new Date(row.publishedAt).toISOString(),
+          linkUrl: link ?? null,
+          feedImageUrl: row.imageUrl?.trim() ? row.imageUrl.trim() : null,
+          brand: brandDisplayByKey.get(row.brandKey) ?? row.brandKey,
+        });
+      }
+
       items.sort((a, b) => new Date(b.timestamp).getTime() - new Date(a.timestamp).getTime());
-      return items.slice(0, 50);
+      return items.slice(0, 80);
+    }),
+  }),
+
+  // Product sharing
+  sharing: router({
+    createShareLink: protectedProcedure
+      .input(z.object({ productInstanceId: z.number().int().positive() }))
+      .mutation(async ({ ctx, input }) => {
+        const instance = await db.getProductInstanceById(input.productInstanceId, ctx.user.id);
+        if (!instance) {
+          throw new TRPCError({
+            code: "NOT_FOUND",
+            message: "Product instance not found or not owned by you",
+          });
+        }
+
+        const share = await db.createProductShare(input.productInstanceId, ctx.user.id);
+        const protocol = ctx.req.protocol || "https";
+        const host = ctx.req.get?.("host") ?? ctx.req.headers?.host ?? "";
+        const baseUrl = host ? `${protocol}://${host}` : "";
+        return {
+          shareToken: share.shareToken,
+          shareUrl: `${baseUrl}/share/${share.shareToken}`,
+        };
+      }),
+
+    getByToken: protectedProcedure
+      .input(z.object({ token: z.string().min(1).max(64) }))
+      .query(async ({ input }) => {
+        const result = await db.getShareByToken(input.token);
+        if (!result) {
+          throw new TRPCError({ code: "NOT_FOUND", message: "Share link not found or expired" });
+        }
+        return result;
+      }),
+
+    accept: protectedProcedure
+      .input(z.object({ token: z.string().min(1).max(64) }))
+      .mutation(async ({ ctx, input }) => {
+        const result = await db.getShareByToken(input.token);
+        if (!result) {
+          throw new TRPCError({ code: "NOT_FOUND", message: "Share link not found" });
+        }
+        if (result.share.status !== "pending") {
+          throw new TRPCError({ code: "BAD_REQUEST", message: "This share has already been used" });
+        }
+        if (result.share.senderUserId === ctx.user.id) {
+          throw new TRPCError({ code: "BAD_REQUEST", message: "You cannot accept your own share" });
+        }
+
+        await db.acceptShare(result.share.id, ctx.user.id);
+
+        return { success: true as const, productId: result.product.id };
+      }),
+
+    dismiss: protectedProcedure
+      .input(z.object({ token: z.string().min(1).max(64) }))
+      .mutation(async ({ ctx, input }) => {
+        const result = await db.getShareByToken(input.token);
+        if (!result) {
+          throw new TRPCError({ code: "NOT_FOUND", message: "Share link not found" });
+        }
+        if (result.share.status !== "pending") {
+          throw new TRPCError({ code: "BAD_REQUEST", message: "This share has already been used" });
+        }
+        if (result.share.senderUserId === ctx.user.id) {
+          throw new TRPCError({ code: "BAD_REQUEST", message: "You cannot dismiss your own share" });
+        }
+
+        await db.dismissShare(result.share.id);
+        return { success: true as const };
+      }),
+
+    revoke: protectedProcedure
+      .input(z.object({ shareId: z.number().int().positive() }))
+      .mutation(async ({ ctx, input }) => {
+        await db.revokeShare(input.shareId, ctx.user.id);
+        return { success: true as const };
+      }),
+
+    sharedWithMe: protectedProcedure.query(async ({ ctx }) => {
+      return db.getSharedWithMe(ctx.user.id);
+    }),
+
+    myOutgoingShares: protectedProcedure.query(async ({ ctx }) => {
+      return db.getMyOutgoingShares(ctx.user.id);
     }),
   }),
 

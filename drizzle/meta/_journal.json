@@ -8,6 +8,27 @@
       "when": 1763726915412,
       "tag": "0000_good_nova",
       "breakpoints": true
+    },
+    {
+      "idx": 1,
+      "version": "5",
+      "when": 1774897615023,
+      "tag": "0001_wide_zarek",
+      "breakpoints": true
+    },
+    {
+      "idx": 2,
+      "version": "5",
+      "when": 1774947853914,
+      "tag": "0002_romantic_agent_zero",
+      "breakpoints": true
+    },
+    {
+      "idx": 3,
+      "version": "5",
+      "when": 1774950401494,
+      "tag": "0003_fair_forge",
+      "breakpoints": true
     }
   ]
 }

@@ -1,4 +1,4 @@
-const CACHE_VERSION = 'thap-v2';
+const CACHE_VERSION = 'thap-v4';
 const STATIC_CACHE = `${CACHE_VERSION}-static`;
 const DYNAMIC_CACHE = `${CACHE_VERSION}-dynamic`;
 const API_CACHE = `${CACHE_VERSION}-api`;
@@ -38,6 +38,15 @@ self.addEventListener('fetch', (event) => {
   if (!event.request.url.startsWith('http')) return;
 
   const url = new URL(event.request.url);
+
+  // Vite dev: source modules and HMR must not go through the SW (dynamic import .tsx/.ts → 503 Offline on failure).
+  if (
+    url.pathname.startsWith('/src/') ||
+    url.pathname.startsWith('/@') ||
+    url.pathname.startsWith('/node_modules/')
+  ) {
+    return;
+  }
 
   if (url.pathname.startsWith('/api/') || API_PATH.test(url.pathname)) {
     event.respondWith(networkFirstWithCache(event.request, API_CACHE));

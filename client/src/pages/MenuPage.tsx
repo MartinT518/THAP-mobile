@@ -35,12 +35,12 @@ export default function MenuPage() {
     { 
       icon: FileText, 
       label: t("menu.legal"), 
-      action: () => toast.info(t("menu.legalSoon"))
+      action: () => navigate("/legal")
     },
     { 
       icon: HelpCircle, 
       label: t("menu.helpSupport"), 
-      action: () => toast.info(t("menu.helpSoon"))
+      action: () => navigate("/help-support")
     },
     { 
       icon: LogOut, 
@@ -64,7 +64,7 @@ export default function MenuPage() {
       {/* Header */}
       <div className="sticky top-0 z-10 bg-white border-b border-border">
         <div className="container flex items-center justify-between py-4">
-          <h1 className="text-2xl font-bold">thap.</h1>
+          <img src="/assets/logo.svg" alt="thap." className="h-7" />
           <button className="p-2">
             <MoreVertical className="w-6 h-6" />
           </button>
@@ -74,9 +74,13 @@ export default function MenuPage() {
       <div className="container py-8">
         {/* User Profile Section */}
         <div className="flex flex-col items-center mb-8 pb-8">
-          <div className="w-32 h-32 rounded-full bg-muted flex items-center justify-center mb-4">
-            <User className="w-16 h-16 text-muted-foreground" />
-          </div>
+          <img
+            src="/assets/dummy-profile-pic.png"
+            alt=""
+            className="w-32 h-32 rounded-full object-cover mb-4"
+            width={128}
+            height={128}
+          />
           <h2 className="text-xl font-bold mb-1">{user?.name || t("menu.userFallback")}</h2>
           <p className="text-sm text-muted-foreground">{user?.email || ""}</p>
         </div>

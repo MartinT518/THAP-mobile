@@ -66,6 +66,14 @@ export type InvokeParams = {
   output_schema?: OutputSchema;
   responseFormat?: ResponseFormat;
   response_format?: ResponseFormat;
+  /**
+   * User API key flow (Settings): OpenAI-compatible chat-completions URL + Bearer token.
+   * When both are set, `THAP_SERVICES_*` is not used and forge-only payload fields are omitted.
+   */
+  openAiCompatUrl?: string;
+  bearerToken?: string;
+  /** Required for BYOK when the provider needs an explicit model id. */
+  model?: string;
 };
 
 export type ToolCall = {
@@ -271,8 +279,6 @@ const normalizeResponseFormat = ({
 };
 
 export async function invokeLLM(params: InvokeParams): Promise<InvokeResult> {
-  assertApiKey();
-
   const {
     messages,
     tools,
@@ -282,10 +288,26 @@ export async function invokeLLM(params: InvokeParams): Promise<InvokeResult> {
     output_schema,
     responseFormat,
     response_format,
+    openAiCompatUrl,
+    bearerToken,
+    model,
   } = params;
 
+  const byok =
+    typeof openAiCompatUrl === "string" &&
+    openAiCompatUrl.trim().length > 0 &&
+    typeof bearerToken === "string" &&
+    bearerToken.trim().length > 0;
+
+  if (!byok) {
+    assertApiKey();
+  }
+
+  const url = byok ? openAiCompatUrl.trim() : resolveApiUrl();
+  const authToken = byok ? bearerToken.trim() : ENV.servicesApiKey!;
+
   const payload: Record<string, unknown> = {
-    model: "gemini-2.5-flash",
+    model: byok ? (model ?? "gpt-4o-mini") : "gemini-2.5-flash",
     messages: messages.map(normalizeMessage),
   };
 
@@ -301,9 +323,14 @@ export async function invokeLLM(params: InvokeParams): Promise<InvokeResult> {
     payload.tool_choice = normalizedToolChoice;
   }
 
-  payload.max_tokens = 32768
-  payload.thinking = {
-    "budget_tokens": 128
+  if (byok) {
+    const cap = params.max_tokens ?? params.maxTokens ?? 4096;
+    payload.max_tokens = Math.min(Math.max(1, cap), 8192);
+  } else {
+    payload.max_tokens = 32768;
+    payload.thinking = {
+      budget_tokens: 128,
+    };
   }
 
   const normalizedResponseFormat = normalizeResponseFormat({
@@ -317,11 +344,11 @@ export async function invokeLLM(params: InvokeParams): Promise<InvokeResult> {
     payload.response_format = normalizedResponseFormat;
   }
 
-  const response = await fetch(resolveApiUrl(), {
+  const response = await fetch(url, {
     method: "POST",
     headers: {
       "content-type": "application/json",
-      authorization: `Bearer ${ENV.servicesApiKey}`,
+      authorization: `Bearer ${authToken}`,
     },
     body: JSON.stringify(payload),
   });

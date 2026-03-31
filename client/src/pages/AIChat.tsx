@@ -3,7 +3,7 @@ import { Card } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { trpc } from "@/lib/trpc";
-import { Loader2, Send, Sparkles, AlertCircle } from "lucide-react";
+import { Loader2, Send, Sparkles, AlertCircle, ListRestart, MessageSquarePlus } from "lucide-react";
 import { useLocation, useRoute } from "wouter";
 import { useState, useRef, useEffect } from "react";
 import { toast } from "sonner";
@@ -30,6 +30,7 @@ export default function AIChat() {
   const [messages, setMessages] = useState<ChatMessage[]>([]);
   const [conversationId, setConversationId] = useState<number | undefined>();
   const [input, setInput] = useState("");
+  const [showSuggestions, setShowSuggestions] = useState(false);
   const messagesEndRef = useRef<HTMLDivElement>(null);
 
   const { data: scanHistory } = trpc.scanHistory.list.useQuery();
@@ -74,6 +75,7 @@ export default function AIChat() {
   const chatMutation = trpc.ai.chat.useMutation({
     onSuccess: (data) => {
       setConversationId(data.conversationId);
+      setShowSuggestions(false);
       setMessages((prev) => [
         ...prev,
         { role: "assistant", content: data.response },
@@ -81,6 +83,7 @@ export default function AIChat() {
     },
     onError: (err) => {
       toast.error(err.message || t("aiChat.chatFailed"));
+      setShowSuggestions(false);
       setMessages((prev) => [
         ...prev,
         {
@@ -101,6 +104,7 @@ export default function AIChat() {
   }, [messages]);
 
   const handlePromptClick = (question: AIQuestion) => {
+    setShowSuggestions(false);
     handleSendMessage(question.text);
   };
 
@@ -108,6 +112,7 @@ export default function AIChat() {
     const textToSend = messageText || input.trim();
     if (!textToSend || chatMutation.isPending) return;
 
+    setShowSuggestions(false);
     setInput("");
     setMessages((prev) => [...prev, { role: "user", content: textToSend }]);
 
@@ -118,12 +123,20 @@ export default function AIChat() {
     });
   };
 
+  const handleNewChat = () => {
+    setConversationId(undefined);
+    setMessages([]);
+    setShowSuggestions(false);
+  };
+
   const handleKeyPress = (e: React.KeyboardEvent) => {
     if (e.key === "Enter" && !e.shiftKey) {
       e.preventDefault();
       handleSendMessage();
     }
   };
+
+  const hasMessages = messages.length > 0;
 
   if (isLoadingConversation) {
     return (
@@ -141,6 +154,16 @@ export default function AIChat() {
       <AppBar
         title={product ? t("aiChat.titleWithProduct", { name: product.name }) : t("aiChat.title")}
         onBack={() => window.history.back()}
+        actions={hasMessages ? (
+          <Button
+            variant="ghost"
+            size="icon"
+            onClick={handleNewChat}
+            title={t("aiChat.newChat")}
+          >
+            <MessageSquarePlus className="w-5 h-5" />
+          </Button>
+        ) : undefined}
       />
 
       <div className="flex-1 overflow-y-auto pb-32">
@@ -176,7 +199,7 @@ export default function AIChat() {
             </Card>
           )}
 
-          {messages.length === 0 && (
+          {!hasMessages && (
             <div className="text-center py-8">
               <div className="w-16 h-16 bg-primary/10 rounded-full flex items-center justify-center mx-auto mb-4">
                 <Sparkles className="w-8 h-8 text-primary" />
@@ -207,45 +230,86 @@ export default function AIChat() {
             </div>
           )}
 
-          {messages.map((message, index) => (
-            <div
-              key={index}
-              className={`flex ${message.role === "user" ? "justify-end" : "justify-start"}`}
-            >
-              <Card
-                className={`max-w-[85%] p-4 ${
-                  message.role === "user"
-                    ? "bg-primary text-primary-foreground"
-                    : "bg-card"
-                }`}
-              >
-                {message.role === "assistant" ? (
-                  <Streamdown className="text-sm prose prose-sm max-w-none dark:prose-invert">
-                    {message.content}
-                  </Streamdown>
-                ) : (
-                  <p className="text-sm">{message.content}</p>
-                )}
-              </Card>
-            </div>
-          ))}
+          {hasMessages && !showSuggestions && (
+            <>
+              {messages.map((message, index) => (
+                <div
+                  key={index}
+                  className={`flex ${message.role === "user" ? "justify-end" : "justify-start"}`}
+                >
+                  <Card
+                    className={`max-w-[85%] p-4 ${
+                      message.role === "user"
+                        ? "bg-primary text-primary-foreground"
+                        : "bg-card"
+                    }`}
+                  >
+                    {message.role === "assistant" ? (
+                      <Streamdown className="text-sm prose prose-sm max-w-none dark:prose-invert">
+                        {message.content}
+                      </Streamdown>
+                    ) : (
+                      <p className="text-sm">{message.content}</p>
+                    )}
+                  </Card>
+                </div>
+              ))}
 
-          {chatMutation.isPending && (
-            <div className="flex justify-start">
-              <Card className="p-4 bg-card">
-                <Loader2 className="w-5 h-5 animate-spin text-primary" />
-              </Card>
-            </div>
+              {chatMutation.isPending && (
+                <div className="flex justify-start">
+                  <Card className="p-4 bg-card">
+                    <Loader2 className="w-5 h-5 animate-spin text-primary" />
+                  </Card>
+                </div>
+              )}
+
+              {chatMutation.isError && (
+                <div className="flex justify-start">
+                  <Card className="p-4 bg-destructive/10 border-destructive/30">
+                    <div className="flex items-center gap-2 text-sm text-destructive">
+                      <AlertCircle className="w-4 h-4 flex-shrink-0" />
+                      <span>{t("aiChat.inlineError")}</span>
+                    </div>
+                  </Card>
+                </div>
+              )}
+
+              {!chatMutation.isPending && (
+                <div className="flex justify-center pt-2">
+                  <button
+                    onClick={() => setShowSuggestions(true)}
+                    className="flex items-center gap-2 px-4 py-2 text-sm text-muted-foreground hover:text-foreground transition-colors"
+                  >
+                    <ListRestart className="w-4 h-4" />
+                    {t("aiChat.showSuggestions")}
+                  </button>
+                </div>
+              )}
+            </>
           )}
 
-          {chatMutation.isError && (
-            <div className="flex justify-start">
-              <Card className="p-4 bg-destructive/10 border-destructive/30">
-                <div className="flex items-center gap-2 text-sm text-destructive">
-                  <AlertCircle className="w-4 h-4 flex-shrink-0" />
-                  <span>{t("aiChat.inlineError")}</span>
-                </div>
-              </Card>
+          {hasMessages && showSuggestions && (
+            <div className="text-center py-6">
+              <p className="text-xs font-medium text-muted-foreground uppercase tracking-wide mb-3">
+                {t("aiChat.suggestedQuestions")}
+              </p>
+              <div className="flex flex-wrap gap-2 justify-center">
+                {relevantQuestions.map((question) => (
+                  <button
+                    key={question.id}
+                    onClick={() => handlePromptClick(question)}
+                    className="px-4 py-2 bg-white border border-border rounded-full text-sm text-left hover:bg-muted transition-colors"
+                  >
+                    {t(`aiQuestions.${question.id}`, { defaultValue: question.text })}
+                  </button>
+                ))}
+              </div>
+              <button
+                onClick={() => setShowSuggestions(false)}
+                className="mt-4 text-sm text-primary hover:underline"
+              >
+                {t("aiChat.backToChat")}
+              </button>
             </div>
           )}
 

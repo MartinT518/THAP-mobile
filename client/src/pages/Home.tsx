@@ -4,7 +4,6 @@ import { MobileLayout } from "@/components/MobileLayout";
 import { Button } from "@/components/ui/button";
 import { EmptyState } from "@/components/EmptyState";
 import { ErrorRetry } from "@/components/ErrorRetry";
-import { getLoginUrl } from "@/const";
 import { useLocation } from "wouter";
 import { trpc } from "@/lib/trpc";
 import { toast } from "sonner";
@@ -15,6 +14,7 @@ import {
   Tag,
   X,
   Package,
+  Users,
 } from "lucide-react";
 import { useState, useMemo, useCallback } from "react";
 import {
@@ -47,6 +47,13 @@ export default function Home() {
   } = trpc.scanHistory.list.useQuery(undefined, {
     enabled: isAuthenticated,
   });
+  const {
+    data: sharedProducts,
+    refetch: refetchShared,
+  } = trpc.sharing.sharedWithMe.useQuery(undefined, {
+    enabled: isAuthenticated,
+  });
+
   const seedDemoMutation = trpc.demo.seedData.useMutation({
     onSuccess: () => {
       toast.success(t("home.demoAdded"));
@@ -56,8 +63,8 @@ export default function Home() {
   });
 
   const handleRefresh = useCallback(async () => {
-    await Promise.all([refetchProducts(), refetchScanHistory()]);
-  }, [refetchProducts, refetchScanHistory]);
+    await Promise.all([refetchProducts(), refetchScanHistory(), refetchShared()]);
+  }, [refetchProducts, refetchScanHistory, refetchShared]);
 
   const { isRefreshing, pullDistance, progress } = usePullToRefresh({
     onRefresh: handleRefresh,
@@ -77,7 +84,12 @@ export default function Home() {
     return ["All", ...Array.from(cats).sort()];
   }, [myProducts]);
 
+  const { data: orderedTags } = trpc.tags.list.useQuery(undefined, {
+    enabled: isAuthenticated,
+  });
+
   const allTags = useMemo(() => {
+    if (orderedTags?.length) return orderedTags.map((t) => t.name);
     if (!myProducts?.length) return [];
     const tagSet = new Set<string>();
     for (const item of myProducts) {
@@ -85,7 +97,7 @@ export default function Home() {
       if (tags) tags.forEach((tag) => tagSet.add(tag));
     }
     return Array.from(tagSet).sort();
-  }, [myProducts]);
+  }, [orderedTags, myProducts]);
 
   const filteredProducts = useMemo(() => {
     if (!myProducts) return [];
@@ -118,23 +130,8 @@ export default function Home() {
   }
 
   if (!isAuthenticated) {
-    return (
-      <MobileLayout>
-        <div className="flex flex-col items-center justify-center min-h-screen p-6">
-          <h1 className="text-4xl font-bold mb-4">thap.</h1>
-          <p className="text-muted-foreground mb-8 text-center">
-            {t("home.tagline")}
-          </p>
-          <Button
-            onClick={() => (window.location.href = getLoginUrl())}
-            size="lg"
-            className="rounded-full"
-          >
-            {t("common.signIn")}
-          </Button>
-        </div>
-      </MobileLayout>
-    );
+    navigate("/login", { replace: true });
+    return null;
   }
 
   return (
@@ -148,7 +145,7 @@ export default function Home() {
       {/* Header */}
       <div className="sticky top-0 z-10 bg-white border-b border-border">
         <div className="container flex items-center justify-between py-4">
-          <h1 className="text-2xl font-bold">thap.</h1>
+          <img src="/assets/logo.svg" alt="thap." className="h-7" />
           <button className="p-2">
             <MoreVertical className="w-6 h-6" />
           </button>
@@ -225,6 +222,49 @@ export default function Home() {
           )}
         </div>
 
+        {/* Shared With Me Section */}
+        {sharedProducts && sharedProducts.length > 0 && (
+          <div>
+            <div className="flex items-center gap-2 mb-4">
+              <Users className="w-5 h-5 text-primary" />
+              <h2 className="text-xl font-bold">{t("sharing.sharedWithMe")}</h2>
+            </div>
+            <div className="flex gap-4 overflow-x-auto pb-2 -mx-4 px-4 scrollbar-hide">
+              {sharedProducts.map((item) => (
+                <div
+                  key={item.share.id}
+                  onClick={() => navigate(`/product/${item.product.id}`)}
+                  className="flex-shrink-0 w-36 cursor-pointer"
+                >
+                  <div className="w-36 h-40 bg-muted rounded-lg mb-2 overflow-hidden flex items-center justify-center relative">
+                    {item.product.imageUrl ? (
+                      <img
+                        src={item.product.imageUrl}
+                        alt={item.product.name}
+                        className="w-full h-full object-cover"
+                        loading="lazy"
+                        width={144}
+                        height={160}
+                      />
+                    ) : (
+                      <span className="text-4xl" aria-hidden="true">📦</span>
+                    )}
+                    <span className="absolute top-2 left-2 px-2 py-0.5 rounded-full text-[10px] font-medium bg-blue-500/90 text-white">
+                      {t("sharing.shared")}
+                    </span>
+                  </div>
+                  <p className="text-sm font-medium line-clamp-2 leading-tight">
+                    {item.product.name}
+                  </p>
+                  <p className="text-xs text-muted-foreground mt-0.5">
+                    {t("sharing.sharedBy", { name: item.senderName ?? t("sharing.someone") })}
+                  </p>
+                </div>
+              ))}
+            </div>
+          </div>
+        )}
+
         {/* My Things Section */}
         <div>
           <div className="flex items-center justify-between mb-4">
@@ -273,33 +313,47 @@ export default function Home() {
           </div>
 
           {/* Tag Filters */}
-          {allTags.length > 0 && (
-            <div className="flex gap-2 overflow-x-auto pb-4 -mx-4 px-4 scrollbar-hide">
-              {selectedTag && (
+          {!!myProducts?.length && (
+            <div className="space-y-3">
+              <div className="flex items-center justify-between px-4">
+                <h3 className="text-sm font-medium">{t("productEdit.tags")}</h3>
                 <button
-                  onClick={() => setSelectedTag(null)}
-                  className="flex items-center gap-1 px-3 py-1.5 rounded-full text-xs font-medium bg-destructive/10 text-destructive hover:bg-destructive/20 transition-colors whitespace-nowrap"
+                  onClick={() => navigate("/tags")}
+                  className="text-sm font-medium text-primary"
                 >
-                  <X className="w-3 h-3" />
-                  {t("common.clearTag")}
+                  {t("tags.manage")}
                 </button>
+              </div>
+
+              {allTags.length > 0 && (
+                <div className="flex gap-2 overflow-x-auto pb-4 -mx-4 px-4 scrollbar-hide">
+                  {selectedTag && (
+                    <button
+                      onClick={() => setSelectedTag(null)}
+                      className="flex items-center gap-1 px-3 py-1.5 rounded-full text-xs font-medium bg-destructive/10 text-destructive hover:bg-destructive/20 transition-colors whitespace-nowrap"
+                    >
+                      <X className="w-3 h-3" />
+                      {t("common.clearTag")}
+                    </button>
+                  )}
+                  {allTags.map((tag) => (
+                    <button
+                      key={tag}
+                      onClick={() =>
+                        setSelectedTag(selectedTag === tag ? null : tag)
+                      }
+                      className={`flex items-center gap-1 px-3 py-1.5 rounded-full text-xs font-medium whitespace-nowrap transition-colors ${
+                        selectedTag === tag
+                          ? "bg-primary text-primary-foreground"
+                          : "bg-muted text-muted-foreground hover:bg-muted/80"
+                      }`}
+                    >
+                      <Tag className="w-3 h-3" />
+                      {tag}
+                    </button>
+                  ))}
+                </div>
               )}
-              {allTags.map((tag) => (
-                <button
-                  key={tag}
-                  onClick={() =>
-                    setSelectedTag(selectedTag === tag ? null : tag)
-                  }
-                  className={`flex items-center gap-1 px-3 py-1.5 rounded-full text-xs font-medium whitespace-nowrap transition-colors ${
-                    selectedTag === tag
-                      ? "bg-primary text-primary-foreground"
-                      : "bg-muted text-muted-foreground hover:bg-muted/80"
-                  }`}
-                >
-                  <Tag className="w-3 h-3" />
-                  {tag}
-                </button>
-              ))}
             </div>
           )}
 
@@ -328,7 +382,7 @@ export default function Home() {
             )
           ) : !myProducts || myProducts.length === 0 ? (
             <EmptyState
-              icon={Package}
+              illustrationSrc="/assets/unbox.svg"
               title={t("home.emptyTitle")}
               description={t("home.emptyDescription")}
               actionLabel={t("home.emptyAction")}

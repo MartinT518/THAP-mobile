@@ -15,6 +15,7 @@ export const users = mysqlTable("users", {
   languageCode: varchar("languageCode", { length: 10 }).default("en"),
   countryCode: varchar("countryCode", { length: 10 }),
   postalCode: varchar("postalCode", { length: 20 }),
+  tagOrder: json("tagOrder").$type<string[]>(),
   
   createdAt: timestamp("createdAt").defaultNow().notNull(),
   updatedAt: timestamp("updatedAt").defaultNow().onUpdateNow().notNull(),
@@ -44,6 +45,12 @@ export const products = mysqlTable("products", {
     sustainabilityScore?: number;
     warrantyInfo?: string;
     description?: string;
+    /** Additional gallery images beyond the primary imageUrl */
+    images?: string[];
+    /** Video URLs (mp4, webm, etc.) for product media */
+    videos?: string[];
+    /** Structured HTML content blocks from Tings API */
+    htmlContent?: Array<{ title?: string; body: string }>;
   }>(),
   
   createdAt: timestamp("createdAt").defaultNow().notNull(),
@@ -153,3 +160,38 @@ export const productDocuments = mysqlTable("product_documents", {
 
 export type ProductDocument = typeof productDocuments.$inferSelect;
 export type InsertProductDocument = typeof productDocuments.$inferInsert;
+
+/**
+ * Curated brand news and promotional spots, matched to products by normalized brand key.
+ */
+export const brandFeedItems = mysqlTable("brand_feed_items", {
+  id: int("id").autoincrement().primaryKey(),
+  brandKey: varchar("brandKey", { length: 255 }).notNull(),
+  kind: mysqlEnum("kind", ["news", "commercial"]).notNull(),
+  title: varchar("title", { length: 500 }).notNull(),
+  summary: text("summary").notNull(),
+  imageUrl: text("imageUrl"),
+  linkUrl: varchar("linkUrl", { length: 2000 }),
+  publishedAt: timestamp("publishedAt").notNull(),
+  createdAt: timestamp("createdAt").defaultNow().notNull(),
+});
+
+export type BrandFeedItem = typeof brandFeedItems.$inferSelect;
+export type InsertBrandFeedItem = typeof brandFeedItems.$inferInsert;
+
+/**
+ * Product shares — link-based sharing of owned products between users.
+ */
+export const productShares = mysqlTable("product_shares", {
+  id: int("id").autoincrement().primaryKey(),
+  productInstanceId: int("productInstanceId").notNull(),
+  senderUserId: int("senderUserId").notNull(),
+  receiverUserId: int("receiverUserId"),
+  shareToken: varchar("shareToken", { length: 64 }).notNull().unique(),
+  status: mysqlEnum("status", ["pending", "accepted", "dismissed"]).default("pending").notNull(),
+  createdAt: timestamp("createdAt").defaultNow().notNull(),
+  acceptedAt: timestamp("acceptedAt"),
+});
+
+export type ProductShare = typeof productShares.$inferSelect;
+export type InsertProductShare = typeof productShares.$inferInsert;

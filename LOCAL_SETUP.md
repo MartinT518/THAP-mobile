@@ -13,7 +13,7 @@ Everything you need to run Thap on your own machine.
 | **MySQL** | 8+ | `mysql --version` | See [Database options](#1-database) below |
 | **Git** | any | `git --version` | https://git-scm.com |
 
-> The CI runs on Node 20. The `packageManager` field pins pnpm 10.4.1.
+> The `packageManager` field pins pnpm 10.4.1. If you see a corepack prompt, run `corepack enable` first.
 
 ---
 
@@ -21,7 +21,25 @@ Everything you need to run Thap on your own machine.
 
 You need a running MySQL 8+ instance. Pick one option:
 
-### Option A — Docker (recommended)
+### Option A — Docker Compose (recommended)
+
+The repo includes a `docker-compose.yml` that starts MySQL 8.4 with sensible defaults:
+
+```bash
+docker compose up -d
+```
+
+Connection string: `mysql://user:password@127.0.0.1:3306/thap`
+
+You can also manage the container with the built-in scripts:
+
+```bash
+pnpm services:start    # docker compose up -d
+pnpm services:stop     # docker compose down
+pnpm services:restart  # stop + start
+```
+
+### Option B — Standalone Docker
 
 ```bash
 docker run -d \
@@ -34,7 +52,7 @@ docker run -d \
 
 Connection string: `mysql://root:root@localhost:3306/thap`
 
-### Option B — Local MySQL install
+### Option C — Local MySQL install
 
 Install MySQL 8 via your OS package manager or installer, then:
 
@@ -42,7 +60,7 @@ Install MySQL 8 via your OS package manager or installer, then:
 CREATE DATABASE thap CHARACTER SET utf8mb4 COLLATE utf8mb4_unicode_ci;
 ```
 
-### Option C — TiDB Cloud (free tier)
+### Option D — TiDB Cloud (free tier)
 
 Create a free Serverless cluster at https://tidbcloud.com and copy the connection string.
 
@@ -68,28 +86,35 @@ Copy `.env.example` to `.env` or create `.env` in the project root. For **where 
 |----------|-----------|---------|
 | `DATABASE_URL` | Yes | MySQL connection string |
 | `JWT_SECRET` | Yes | Signs the session cookie (HS256 via jose) |
-| `OAUTH_SERVER_URL` | For login | Base URL of an OAuth backend that implements the WebDev-style exchange in `server/_core/sdk.ts` (`ExchangeToken`, `GetUserInfo`, …) |
-| `VITE_OAUTH_PORTAL_URL` | For login | Where the browser sends users to sign in (must match your IdP’s hosted login + `/app-auth` flow expected by `client/src/const.ts`) |
-| `VITE_OAUTH_CLIENT_ID` | For login | OAuth client id (exposed to the browser as `VITE_*`) |
-| `OWNER_OPEN_ID` | No | First user with this `openId` is promoted to admin (`server/db.ts`) |
+| `VITE_GOOGLE_CLIENT_ID` | For login | Google Sign-In client ID (exposed to browser as `VITE_*`; server also reads it for token verification) |
+| `OWNER_OPEN_ID` | No | First user with this `openId` is promoted to admin |
 | `VITE_APP_TITLE` | No | App title in the UI |
-| `THAP_SERVICES_BASE_URL` | No* | Base URL for server integrations: OpenAI-compatible `POST /v1/chat/completions`, storage proxy, server-side maps helpers, notifications, etc. |
+| `VITE_APP_LOGO` | No | PWA / favicon fallback (PNG); SVG served from `/favicon.svg` |
+| `DEV_AUTH_OPEN_ID` | No | Skip OAuth in dev mode — auto-creates user if missing (non-production only) |
+| `TINGS_API_BASE` | No | Legacy QR deep-link resolution (`id.tings.info` / `qr.tings.info`) |
+| `TINGS_API_BEARER_TOKEN` | No | Bearer token for the Tings API |
+| `ICECAT_SHOPNAME` | No | Icecat Live JSON API — product lookup by GTIN/EAN |
+| `ICECAT_API_TOKEN` | No | Icecat API authentication |
+| `ICECAT_CONTENT_TOKEN` | No | Icecat image asset access |
+| `ICECAT_LANG` | No | Icecat response language (default: `EN`) |
+| `THAP_SERVICES_BASE_URL` | No* | Base URL for server integrations: OpenAI-compatible chat, storage proxy, maps, notifications |
 | `THAP_SERVICES_API_KEY` | No* | Bearer token for that base URL |
-| `VITE_MAPS_PROXY_BASE_URL` | No | Browser: base URL for Google Maps JS loader (`…/v1/maps/proxy`) |
+| `VITE_MAPS_PROXY_BASE_URL` | No | Browser: base URL for Google Maps JS loader |
 | `VITE_MAPS_PROXY_API_KEY` | No | Key for that maps proxy |
 
-\* Without services URL/key, AI chat, file uploads, voice transcription, and some admin tools fail until you configure them or replace those code paths.
-
-**Legacy env names** (still read if the new names are unset): `VITE_APP_ID`, `BUILT_IN_FORGE_API_URL`, `BUILT_IN_FORGE_API_KEY`, `VITE_FRONTEND_FORGE_API_URL`, `VITE_FRONTEND_FORGE_API_KEY`.
+\* Without services URL/key, AI chat, file uploads, voice transcription, and some admin tools fail.
 
 ### What happens without optional vars?
 
 | Missing variable | Impact |
 |------------------|--------|
-| `THAP_SERVICES_API_KEY` / `THAP_SERVICES_BASE_URL` | AI chat, file uploads, image generation, voice transcription, and related server calls fail |
-| `VITE_MAPS_PROXY_*` | Map component skips loading (empty map area + console warning) |
-| `OAUTH_SERVER_URL` / portal / client id | Login redirect is broken — you cannot authenticate |
+| `THAP_SERVICES_*` | AI chat, file uploads, image generation, voice transcription fail |
+| `VITE_MAPS_PROXY_*` | Map component skips loading (empty area + console warning) |
+| `VITE_GOOGLE_CLIENT_ID` | Login redirect is broken — cannot authenticate |
+| `DEV_AUTH_OPEN_ID` | Must use real OAuth to sign in during development |
 | `OWNER_OPEN_ID` | No automatic admin promotion by OpenID |
+| `TINGS_API_*` | Legacy Tings QR codes cannot be resolved |
+| `ICECAT_*` | External product search by GTIN/EAN is unavailable |
 
 ---
 
@@ -104,10 +129,10 @@ This runs `drizzle-kit generate && drizzle-kit migrate` — it generates migrati
 Verify tables were created:
 
 ```bash
-mysql -u root -proot -e "USE thap; SHOW TABLES;"
+mysql -u user -ppassword -e "USE thap; SHOW TABLES;"
 ```
 
-You should see: `users`, `products`, `product_instances`, `scan_history`, `ai_conversations`, `ai_provider_settings`, `product_documents`.
+You should see: `users`, `products`, `product_instances`, `scan_history`, `ai_conversations`, `ai_provider_settings`, `product_documents`, `brand_feed_items`, `product_shares`.
 
 ---
 
@@ -141,13 +166,16 @@ The server serves both the Vite frontend (with HMR) and the tRPC API — no sepa
 pnpm test
 ```
 
-Tests use Vitest and **do not require a database** — they call tRPC procedures with mocked contexts. There are 11 test files in `server/`:
+Tests use Vitest and **do not require a database** — they call tRPC procedures with mocked contexts. There are 20 test files in `server/`:
 
 ```
-aiChat.test.ts       ai.test.ts           aiQuestions.test.ts
-auth.logout.test.ts  cleanup.test.ts      crypto.test.ts
-documents.test.ts    productEdit.test.ts  products.test.ts
-scanHistory.test.ts  settings.test.ts
+accountDeletion.test.ts    ai.test.ts              aiChat.test.ts
+aiQuestions.test.ts         auth.logout.test.ts     cleanup.test.ts
+crypto.test.ts              deeplinkTings.test.ts   documents.test.ts
+feed.test.ts                opengraph.test.ts       productEdit.test.ts
+productRegistration.test.ts products.test.ts        profileUpdate.test.ts
+qrLookup.test.ts            removeProduct.test.ts   scanHistory.test.ts
+settings.test.ts            sharing.test.ts
 ```
 
 CI also runs `pnpm check` (TypeScript type check) — run it locally too before pushing:
@@ -174,12 +202,12 @@ pnpm start
 ```
 [ ] Node 20+ installed
 [ ] pnpm 10+ installed
-[ ] MySQL 8+ running with a `thap` database
+[ ] MySQL 8+ running with a `thap` database (or `docker compose up -d`)
 [ ] .env file created with at least DATABASE_URL and JWT_SECRET
 [ ] pnpm install — no errors
-[ ] pnpm db:push — tables created
+[ ] pnpm db:push — 9 tables created
 [ ] pnpm dev — server starts on localhost:3000
-[ ] pnpm test — all tests pass
+[ ] pnpm test — all 20 test files pass
 ```
 
 ---
@@ -206,6 +234,10 @@ The project patches `wouter@3.7.1`. Make sure you have the `patches/` directory 
 
 Run `pnpm install` to ensure all dependencies are resolved, then `pnpm test` again.
 
+### Docker Compose issues on Windows
+
+Use `docker compose` (v2, no hyphen). If using PowerShell, the `serviceScripts/*.ps1` wrappers handle this for you.
+
 ---
 
 ## Available scripts
@@ -215,7 +247,15 @@ Run `pnpm install` to ensure all dependencies are resolved, then `pnpm test` aga
 | `pnpm dev` | Start dev server (Vite HMR + Express + tRPC) on port 3000 |
 | `pnpm build` | Production build (Vite frontend + esbuild server) |
 | `pnpm start` | Run production build |
-| `pnpm test` | Run Vitest test suite |
+| `pnpm test` | Run Vitest test suite (20 test files) |
 | `pnpm check` | TypeScript type check (`tsc --noEmit`) |
 | `pnpm format` | Format code with Prettier |
 | `pnpm db:push` | Generate and apply database migrations |
+| `pnpm icons` | Generate PWA icons from source SVG |
+| `pnpm services:start` | Start Docker services (MySQL) |
+| `pnpm services:stop` | Stop Docker services |
+| `pnpm services:restart` | Restart Docker services |
+
+---
+
+**Last updated**: March 2026

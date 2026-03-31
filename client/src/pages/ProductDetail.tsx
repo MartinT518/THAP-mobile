@@ -27,13 +27,40 @@ import {
   Share2,
   Link2,
   CheckCircle2,
+  ChevronDown,
+  Building2,
+  ClipboardList,
+  X,
+  Play,
+  FileDown,
+  QrCode,
+  Users,
 } from "lucide-react";
 import { useLocation, useRoute } from "wouter";
 import { trpc } from "@/lib/trpc";
-import { useState } from "react";
+import { useState, useEffect, useRef, useCallback } from "react";
+import {
+  Collapsible,
+  CollapsibleContent,
+  CollapsibleTrigger,
+} from "@/components/ui/collapsible";
+import { Label } from "@/components/ui/label";
+import { Input } from "@/components/ui/input";
+import { Textarea } from "@/components/ui/textarea";
+import { cn, openExternalLink } from "@/lib/utils";
 import { ProductDetailSkeleton } from "@/components/ProductCardSkeleton";
 import { AppBar } from "@/components/AppBar";
 import { toast } from "sonner";
+import {
+  Carousel,
+  CarouselContent,
+  CarouselItem,
+  type CarouselApi,
+} from "@/components/ui/carousel";
+import Zoom from "react-medium-image-zoom";
+import "react-medium-image-zoom/dist/styles.css";
+import DOMPurify from "dompurify";
+import { QRCodeSheet } from "@/components/QRCodeSheet";
 
 export default function ProductDetail() {
   const { t } = useTranslation();
@@ -46,6 +73,8 @@ export default function ProductDetail() {
     { enabled: !!productId }
   );
 
+  const { data: me } = trpc.auth.me.useQuery();
+
   const utils = trpc.useUtils();
 
   const instanceId = productData?.instance?.id;
@@ -53,6 +82,15 @@ export default function ProductDetail() {
   const { data: documents } = trpc.documents.list.useQuery(
     { productInstanceId: instanceId! },
     { enabled: !!instanceId },
+  );
+
+  const registrationProductId = productData?.product?.productId ?? "";
+  const { data: registrationForm } = trpc.products.getRegistrationForm.useQuery(
+    { productId: registrationProductId },
+    {
+      enabled: !!(productData && productData.instance) && !!registrationProductId,
+      staleTime: 60_000,
+    },
   );
 
   const removeMutation = trpc.products.removeFromMyThings.useMutation({
@@ -65,8 +103,55 @@ export default function ProductDetail() {
   });
 
   const [selectedImage, setSelectedImage] = useState(0);
+  const [carouselApi, setCarouselApi] = useState<CarouselApi>();
+  const [pdfViewerUrl, setPdfViewerUrl] = useState<string | null>(null);
   const [linkCopied, setLinkCopied] = useState(false);
   const [showShareDialog, setShowShareDialog] = useState(false);
+  const [showQrSheet, setShowQrSheet] = useState(false);
+  const [feedbackOpen, setFeedbackOpen] = useState(false);
+  const [feedbackText, setFeedbackText] = useState("");
+  const [feedbackName, setFeedbackName] = useState("");
+  const [feedbackEmail, setFeedbackEmail] = useState("");
+  const profilePrefilled = useRef(false);
+
+  const onCarouselSelect = useCallback(() => {
+    if (!carouselApi) return;
+    setSelectedImage(carouselApi.selectedScrollSnap());
+  }, [carouselApi]);
+
+  useEffect(() => {
+    if (!carouselApi) return;
+    carouselApi.on("select", onCarouselSelect);
+    return () => { carouselApi.off("select", onCarouselSelect); };
+  }, [carouselApi, onCarouselSelect]);
+
+  const feedbackMutation = trpc.products.sendFeedback.useMutation({
+    onSuccess: () => {
+      toast.success(t("productDetail.feedbackSuccess"));
+      setFeedbackText("");
+    },
+    onError: (err) =>
+      toast.error(err.message || t("productDetail.feedbackError")),
+  });
+
+  const shareLinkMutation = trpc.sharing.createShareLink.useMutation({
+    onSuccess: async (data) => {
+      try {
+        await navigator.clipboard.writeText(data.shareUrl);
+        toast.success(t("sharing.linkCopied"));
+      } catch {
+        toast.success(t("sharing.shareLinkCreated"));
+      }
+    },
+    onError: (err) => toast.error(err.message),
+  });
+
+  useEffect(() => {
+    if (!me || profilePrefilled.current) return;
+    if (typeof me.name === "string" && me.name.trim()) setFeedbackName(me.name.trim());
+    if (typeof me.email === "string" && me.email.trim()) setFeedbackEmail(me.email.trim());
+    profilePrefilled.current = true;
+  }, [me]);
 
   function getShareUrl(id: number) {
     return `${window.location.origin}/product/${id}`;
@@ -93,7 +178,7 @@ export default function ProductDetail() {
   }
 
   async function handleNativeShare(name: string, id: number) {
-    if (navigator.share) {
+    if (typeof navigator.share === "function") {
       try {
         await navigator.share({
           title: name,
@@ -140,8 +225,20 @@ export default function ProductDetail() {
   }
 
   const { product, instance } = productData;
-  const metadata = product.metadata as any;
-  const images = [product.imageUrl].filter(Boolean);
+  const metadata = product.metadata as Record<string, unknown> | null;
+  const images: string[] = [
+    product.imageUrl,
+    ...((metadata?.images as string[] | undefined) ?? []),
+  ].filter((u): u is string => typeof u === "string" && u.length > 0);
+  const videos = ((metadata?.videos as string[] | undefined) ?? []).filter(
+    (u): u is string => typeof u === "string" && u.startsWith("http"),
+  );
+  const htmlContent = (metadata?.htmlContent as Array<{ title?: string; body: string }> | undefined) ?? [];
+  const description = typeof metadata?.description === "string" ? metadata.description : undefined;
+  const specifications = (metadata?.specifications ?? {}) as Record<string, string>;
+  const careInstructions = (metadata?.careInstructions ?? []) as string[];
+  const warrantyInfo = typeof metadata?.warrantyInfo === "string" ? metadata.warrantyInfo : undefined;
+  const sustainabilityScore = typeof metadata?.sustainabilityScore === "number" ? metadata.sustainabilityScore : undefined;
 
   return (
     <MobileLayout>
@@ -156,28 +253,42 @@ export default function ProductDetail() {
       </div>
 
       <div className="pb-24">
-        {/* Image Gallery */}
+        {/* Image Carousel */}
         {images.length > 0 && (
           <div className="bg-muted">
-            <div className="aspect-square relative overflow-hidden">
-              <img
-                src={images[selectedImage] ?? ""}
-                alt={product.name}
-                className="w-full h-full object-cover"
-              />
-            </div>
-            {images.length > 1 && (
-              <div className="flex gap-2 p-4 overflow-x-auto">
+            <Carousel
+              opts={{ loop: images.length > 1 }}
+              setApi={setCarouselApi}
+              className="w-full"
+            >
+              <CarouselContent className="ml-0">
                 {images.map((img, idx) => (
+                  <CarouselItem key={idx} className="pl-0">
+                    <div className="aspect-square relative overflow-hidden">
+                      <Zoom>
+                        <img
+                          src={img}
+                          alt={`${product.name} – ${idx + 1}`}
+                          className="w-full h-full object-cover cursor-zoom-in"
+                        />
+                      </Zoom>
+                    </div>
+                  </CarouselItem>
+                ))}
+              </CarouselContent>
+            </Carousel>
+            {images.length > 1 && (
+              <div className="flex justify-center gap-1.5 py-3">
+                {images.map((_, idx) => (
                   <button
                     key={idx}
-                    onClick={() => setSelectedImage(idx)}
-                    className={`flex-shrink-0 w-16 h-16 rounded-lg overflow-hidden border-2 ${
-                      selectedImage === idx ? "border-primary" : "border-transparent"
-                    }`}
-                  >
-                    <img src={img ?? ""} alt="" className="w-full h-full object-cover" />
-                  </button>
+                    onClick={() => carouselApi?.scrollTo(idx)}
+                    aria-label={`Go to image ${idx + 1}`}
+                    className={cn(
+                      "w-2 h-2 rounded-full transition-colors",
+                      selectedImage === idx ? "bg-primary" : "bg-border",
+                    )}
+                  />
                 ))}
               </div>
             )}
@@ -237,13 +348,25 @@ export default function ProductDetail() {
             </Button>
           </div>
 
-          {/* Share & Remove Buttons */}
+          {instance && registrationForm && (
+            <Button
+              variant="secondary"
+              className="w-full"
+              size="lg"
+              onClick={() => navigate(`/product/${product.id}/register`)}
+            >
+              <ClipboardList className="w-5 h-5 mr-2" />
+              {t("productDetail.registerProduct")}
+            </Button>
+          )}
+
+          {/* Share, QR & Share Link */}
           <div className="flex gap-2">
             <Button
               variant="outline"
               className="flex-1"
               onClick={() => {
-                if (navigator.share) {
+                if (typeof navigator.share === "function") {
                   handleNativeShare(product.name, product.id);
                 } else {
                   setShowShareDialog(true);
@@ -255,6 +378,29 @@ export default function ProductDetail() {
             </Button>
 
             {instance && (
+              <Button
+                variant="outline"
+                className="flex-1"
+                onClick={() => setShowQrSheet(true)}
+              >
+                <QrCode className="w-4 h-4 mr-2" />
+                {t("productDetail.qrCode")}
+              </Button>
+            )}
+          </div>
+
+          {instance && (
+            <div className="flex gap-2">
+              <Button
+                variant="outline"
+                className="flex-1"
+                onClick={() => shareLinkMutation.mutate({ productInstanceId: instance.id })}
+                disabled={shareLinkMutation.isPending}
+              >
+                <Users className="w-4 h-4 mr-2" />
+                {t("sharing.createShareLink")}
+              </Button>
+
               <AlertDialog>
                 <AlertDialogTrigger asChild>
                   <Button
@@ -284,8 +430,8 @@ export default function ProductDetail() {
                   </AlertDialogFooter>
                 </AlertDialogContent>
               </AlertDialog>
-            )}
-          </div>
+            </div>
+          )}
 
           {/* Share Dialog (fallback for browsers without native share) */}
           {showShareDialog && (
@@ -311,31 +457,175 @@ export default function ProductDetail() {
             </div>
           )}
 
+          {/* Manufacturer feedback */}
+          <Collapsible open={feedbackOpen} onOpenChange={setFeedbackOpen}>
+            <div className="rounded-xl border border-border bg-muted/40 overflow-hidden">
+              <CollapsibleTrigger className="flex w-full items-center justify-between gap-3 px-4 py-3 text-left font-semibold hover:bg-muted/60 transition-colors min-h-[44px]">
+                <span className="flex items-center gap-2">
+                  <Building2 className="w-5 h-5 text-muted-foreground shrink-0" />
+                  {t("productDetail.feedbackTitle")}
+                </span>
+                <ChevronDown
+                  className={cn(
+                    "w-5 h-5 text-muted-foreground shrink-0 transition-transform duration-200",
+                    feedbackOpen && "rotate-180",
+                  )}
+                />
+              </CollapsibleTrigger>
+              <CollapsibleContent>
+                <div className="px-4 pb-4 pt-0 space-y-3 border-t border-border">
+                  {product.productId.startsWith("icecat-") ? (
+                    <p className="text-sm text-muted-foreground pt-3">
+                      {t("productDetail.feedbackCatalogOnly")}
+                    </p>
+                  ) : (
+                    <>
+                      <div className="space-y-2 pt-3">
+                        <Label htmlFor="producer-feedback">{t("productDetail.feedbackMessageLabel")}</Label>
+                        <Textarea
+                          id="producer-feedback"
+                          value={feedbackText}
+                          onChange={(e) => setFeedbackText(e.target.value)}
+                          placeholder={t("productDetail.feedbackPlaceholder")}
+                          className="min-h-[120px] resize-y"
+                          maxLength={5000}
+                          disabled={feedbackMutation.isPending}
+                        />
+                      </div>
+                      <div className="space-y-2">
+                        <Label htmlFor="producer-feedback-name">{t("productDetail.feedbackNameLabel")}</Label>
+                        <Input
+                          id="producer-feedback-name"
+                          value={feedbackName}
+                          onChange={(e) => setFeedbackName(e.target.value)}
+                          autoComplete="name"
+                          disabled={feedbackMutation.isPending}
+                        />
+                      </div>
+                      <div className="space-y-2">
+                        <Label htmlFor="producer-feedback-email">{t("productDetail.feedbackEmailLabel")}</Label>
+                        <Input
+                          id="producer-feedback-email"
+                          type="email"
+                          inputMode="email"
+                          value={feedbackEmail}
+                          onChange={(e) => setFeedbackEmail(e.target.value)}
+                          autoComplete="email"
+                          disabled={feedbackMutation.isPending}
+                        />
+                      </div>
+                      <Button
+                        className="w-full"
+                        size="lg"
+                        disabled={feedbackMutation.isPending}
+                        onClick={() => {
+                          const trimmed = feedbackText.trim();
+                          if (!trimmed) {
+                            toast.error(t("productDetail.feedbackRequired"));
+                            return;
+                          }
+                          feedbackMutation.mutate({
+                            productId: product.productId,
+                            feedback: trimmed,
+                            name: feedbackName.trim() || undefined,
+                            email: feedbackEmail.trim() || undefined,
+                          });
+                        }}
+                      >
+                        {t("productDetail.feedbackSubmit")}
+                      </Button>
+                    </>
+                  )}
+                </div>
+              </CollapsibleContent>
+            </div>
+          </Collapsible>
+
+          {/* Video Media */}
+          {videos.length > 0 && (
+            <div className="space-y-3">
+              <div className="flex items-center gap-2">
+                <Play className="w-5 h-5 text-muted-foreground" />
+                <h3 className="font-semibold">{t("productDetail.videos")}</h3>
+              </div>
+              <div className="space-y-3">
+                {videos.map((url, idx) => (
+                  <video
+                    key={idx}
+                    src={url}
+                    controls
+                    preload="metadata"
+                    playsInline
+                    className="w-full rounded-lg bg-black"
+                  >
+                    <a href={url} target="_blank" rel="noopener noreferrer">
+                      {t("productDetail.downloadVideo")}
+                    </a>
+                  </video>
+                ))}
+              </div>
+            </div>
+          )}
+
           {/* Description */}
-          {metadata?.description && (
+          {description && (
             <div className="space-y-2">
               <div className="flex items-center gap-2">
                 <Info className="w-5 h-5 text-muted-foreground" />
                 <h3 className="font-semibold">{t("productDetail.description")}</h3>
               </div>
               <p className="text-sm text-muted-foreground leading-relaxed">
-                {metadata.description}
+                {description}
               </p>
             </div>
           )}
 
+          {/* Rich HTML Content Blocks */}
+          {htmlContent.length > 0 && (
+            <div className="space-y-4">
+              {htmlContent.map((block, idx) => (
+                <div key={idx} className="space-y-2">
+                  {block.title && (
+                    <h3 className="font-semibold">{block.title}</h3>
+                  )}
+                  <div
+                    className="prose prose-sm max-w-none text-muted-foreground"
+                    onClick={(e) => {
+                      const anchor = (e.target as HTMLElement).closest("a[href]");
+                      if (anchor) {
+                        e.preventDefault();
+                        openExternalLink(anchor.getAttribute("href")!);
+                      }
+                    }}
+                    dangerouslySetInnerHTML={{
+                      __html: DOMPurify.sanitize(block.body, {
+                        ALLOWED_TAGS: [
+                          "p", "br", "strong", "em", "b", "i", "u",
+                          "ul", "ol", "li", "h1", "h2", "h3", "h4", "h5", "h6",
+                          "a", "img", "table", "thead", "tbody", "tr", "th", "td",
+                          "blockquote", "code", "pre", "span", "div", "hr", "sub", "sup",
+                        ],
+                        ALLOWED_ATTR: ["href", "target", "rel", "src", "alt", "class", "style", "width", "height"],
+                      }),
+                    }}
+                  />
+                </div>
+              ))}
+            </div>
+          )}
+
           {/* Specifications */}
-          {metadata?.specifications && Object.keys(metadata.specifications).length > 0 && (
+          {Object.keys(specifications).length > 0 && (
             <div className="space-y-3">
               <div className="flex items-center gap-2">
                 <Package className="w-5 h-5 text-muted-foreground" />
                 <h3 className="font-semibold">{t("productDetail.specifications")}</h3>
               </div>
               <div className="bg-muted rounded-lg p-4 space-y-2">
-                {Object.entries(metadata.specifications).map(([key, value]) => (
+                {Object.entries(specifications).map(([key, value]) => (
                   <div key={key} className="flex justify-between text-sm">
                     <span className="text-muted-foreground">{key}</span>
-                    <span className="font-medium">{value as string}</span>
+                    <span className="font-medium">{value}</span>
                   </div>
                 ))}
               </div>
@@ -343,7 +633,7 @@ export default function ProductDetail() {
           )}
 
           {/* Care Instructions */}
-          {metadata?.careInstructions && metadata.careInstructions.length > 0 && (
+          {careInstructions.length > 0 && (
             <div className="space-y-3">
               <div className="flex items-center gap-2">
                 <FileText className="w-5 h-5 text-muted-foreground" />
@@ -351,7 +641,7 @@ export default function ProductDetail() {
               </div>
               <div className="bg-muted rounded-lg p-4">
                 <ul className="space-y-2">
-                  {metadata.careInstructions.map((instruction: string, idx: number) => (
+                  {careInstructions.map((instruction, idx) => (
                     <li key={idx} className="text-sm text-muted-foreground flex gap-2">
                       <span className="text-primary">•</span>
                       <span>{instruction}</span>
@@ -363,14 +653,14 @@ export default function ProductDetail() {
           )}
 
           {/* Warranty Information */}
-          {metadata?.warrantyInfo && (
+          {warrantyInfo && (
             <div className="space-y-3">
               <div className="flex items-center gap-2">
                 <Shield className="w-5 h-5 text-muted-foreground" />
                 <h3 className="font-semibold">{t("productDetail.warrantyInfo")}</h3>
               </div>
               <div className="bg-muted rounded-lg p-4">
-                <p className="text-sm text-muted-foreground">{metadata.warrantyInfo}</p>
+                <p className="text-sm text-muted-foreground">{warrantyInfo}</p>
               </div>
             </div>
           )}
@@ -421,6 +711,7 @@ export default function ProductDetail() {
               <div className="space-y-2">
                 {documents.map((doc) => {
                   const isImage = doc.mimeType?.startsWith("image/");
+                  const isPdf = doc.mimeType === "application/pdf";
                   return (
                     <div
                       key={doc.id}
@@ -447,16 +738,28 @@ export default function ProductDetail() {
                             ` · ${new Date(doc.createdAt).toLocaleDateString()}`}
                         </p>
                       </div>
-                      {doc.fileUrl && (
-                        <a
-                          href={doc.fileUrl}
-                          target="_blank"
-                          rel="noopener noreferrer"
-                          className="p-2 text-muted-foreground hover:text-primary transition-colors flex-shrink-0"
-                        >
-                          <Download className="w-4 h-4" />
-                        </a>
-                      )}
+                      <div className="flex items-center gap-1 flex-shrink-0">
+                        {isPdf && doc.fileUrl && (
+                          <button
+                            onClick={() => setPdfViewerUrl(doc.fileUrl!)}
+                            className="p-2 text-muted-foreground hover:text-primary transition-colors"
+                            aria-label={t("productDetail.viewPdf")}
+                          >
+                            <FileText className="w-4 h-4" />
+                          </button>
+                        )}
+                        {doc.fileUrl && (
+                          <a
+                            href={doc.fileUrl}
+                            target="_blank"
+                            rel="noopener noreferrer"
+                            download
+                            className="p-2 text-muted-foreground hover:text-primary transition-colors"
+                          >
+                            <Download className="w-4 h-4" />
+                          </a>
+                        )}
+                      </div>
                     </div>
                   );
                 })}
@@ -465,7 +768,7 @@ export default function ProductDetail() {
           )}
 
           {/* Sustainability Score */}
-          {metadata?.sustainabilityScore !== undefined && (
+          {sustainabilityScore !== undefined && (
             <div className="space-y-3 border-t border-border pt-6">
               <h3 className="font-semibold">{t("productDetail.sustainability")}</h3>
               <div className="bg-muted rounded-lg p-4">
@@ -475,10 +778,10 @@ export default function ProductDetail() {
                     <div className="w-32 h-2 bg-border rounded-full overflow-hidden">
                       <div
                         className="h-full bg-green-500"
-                        style={{ width: `${metadata.sustainabilityScore}%` }}
+                        style={{ width: `${sustainabilityScore}%` }}
                       />
                     </div>
-                    <span className="text-sm font-medium">{t("productDetail.scoreFormat", { score: metadata.sustainabilityScore })}</span>
+                    <span className="text-sm font-medium">{t("productDetail.scoreFormat", { score: sustainabilityScore })}</span>
                   </div>
                 </div>
               </div>
@@ -486,6 +789,52 @@ export default function ProductDetail() {
           )}
         </div>
       </div>
+
+      {/* QR Code Sheet */}
+      {instance && (
+        <QRCodeSheet
+          open={showQrSheet}
+          onOpenChange={setShowQrSheet}
+          productUrl={getShareUrl(product.id)}
+          productName={product.name}
+        />
+      )}
+
+      {/* Inline PDF Viewer */}
+      {pdfViewerUrl && (
+        <div
+          className="fixed inset-0 z-50 bg-black/80 flex flex-col"
+          onClick={() => setPdfViewerUrl(null)}
+        >
+          <div className="flex items-center justify-between p-4 bg-white border-b">
+            <h3 className="font-semibold truncate">{t("productDetail.pdfViewer")}</h3>
+            <div className="flex items-center gap-2">
+              <a
+                href={pdfViewerUrl}
+                download
+                target="_blank"
+                rel="noopener noreferrer"
+                className="p-2 text-muted-foreground hover:text-primary"
+                onClick={(e) => e.stopPropagation()}
+              >
+                <FileDown className="w-5 h-5" />
+              </a>
+              <button
+                onClick={() => setPdfViewerUrl(null)}
+                className="p-2 text-muted-foreground hover:text-foreground"
+              >
+                <X className="w-5 h-5" />
+              </button>
+            </div>
+          </div>
+          <iframe
+            src={pdfViewerUrl}
+            className="flex-1 w-full bg-white"
+            title={t("productDetail.pdfViewer")}
+            onClick={(e) => e.stopPropagation()}
+          />
+        </div>
+      )}
     </MobileLayout>
   );
 }

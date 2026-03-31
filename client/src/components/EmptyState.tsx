@@ -2,7 +2,8 @@ import { LucideIcon } from "lucide-react";
 import { Button } from "./ui/button";
 
 interface EmptyStateProps {
-  icon: LucideIcon;
+  icon?: LucideIcon;
+  illustrationSrc?: string;
   title: string;
   description: string;
   actionLabel?: string;
@@ -11,6 +12,7 @@ interface EmptyStateProps {
 
 export function EmptyState({
   icon: Icon,
+  illustrationSrc,
   title,
   description,
   actionLabel,
@@ -18,9 +20,19 @@ export function EmptyState({
 }: EmptyStateProps) {
   return (
     <div className="flex flex-col items-center justify-center py-12 px-6 text-center">
-      <div className="w-16 h-16 rounded-full bg-muted flex items-center justify-center mb-4">
-        <Icon className="w-8 h-8 text-muted-foreground" />
-      </div>
+      {illustrationSrc ? (
+        <img
+          src={illustrationSrc}
+          alt=""
+          className="w-32 h-32 mb-6"
+          width={128}
+          height={128}
+        />
+      ) : Icon ? (
+        <div className="w-16 h-16 rounded-full bg-muted flex items-center justify-center mb-4">
+          <Icon className="w-8 h-8 text-muted-foreground" />
+        </div>
+      ) : null}
       <h3 className="text-lg font-semibold mb-2">{title}</h3>
       <p className="text-sm text-muted-foreground mb-6 max-w-sm">{description}</p>
       {actionLabel && onAction && (

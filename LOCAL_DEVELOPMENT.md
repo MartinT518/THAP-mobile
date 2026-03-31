@@ -1,6 +1,6 @@
 # Thap — Local Development Guide
 
-**Stack**: React 19 + TypeScript + Tailwind 4 + tRPC 11 + Express 4 + Drizzle ORM (MySQL)
+**Stack**: React 19 + TypeScript 5.9 + Tailwind 4 + tRPC 11 + Express 4 + Drizzle ORM (MySQL)
 
 ---
 
@@ -8,7 +8,7 @@
 
 | Tool | Version | Install |
 |------|---------|---------|
-| Node.js | 18+ | https://nodejs.org |
+| Node.js | 20+ | https://nodejs.org |
 | pnpm | 10+ | `npm install -g pnpm` |
 | Git | any | https://git-scm.com |
 
@@ -32,16 +32,25 @@ Copy `.env.example` to `.env` and fill in the values. See `docs/03-development/E
 # Database (MySQL / TiDB)
 DATABASE_URL=mysql://user:password@127.0.0.1:3306/thap
 
-# Auth (provider-agnostic OAuth — set URLs/keys for your stack)
+# Auth (Google Sign-In)
 JWT_SECRET=change-me-to-a-long-random-string
-OAUTH_SERVER_URL=
-VITE_OAUTH_PORTAL_URL=
-VITE_OAUTH_CLIENT_ID=
+VITE_GOOGLE_CLIENT_ID=
 
 # User with this openId gets admin role on first sync
 OWNER_OPEN_ID=
 
 VITE_APP_TITLE=Thap
+
+# Dev-only: skip OAuth by auto-creating a user with this openId
+DEV_AUTH_OPEN_ID=
+
+# Legacy QR deep links (id.tings.info / qr.tings.info)
+TINGS_API_BASE=https://tingsapi.test.mindworks.ee
+TINGS_API_BEARER_TOKEN=
+
+# Icecat product lookup by GTIN/EAN
+ICECAT_SHOPNAME=
+ICECAT_API_TOKEN=
 
 # Optional: server-side integrations (OpenAI-compatible chat, storage proxy, maps, notifications)
 THAP_SERVICES_BASE_URL=
@@ -52,20 +61,20 @@ VITE_MAPS_PROXY_BASE_URL=
 VITE_MAPS_PROXY_API_KEY=
 ```
 
-> **Note**: If you are running this project inside Manus, environment variables are injected automatically — no `.env` file needed. Legacy env names (`VITE_APP_ID`, `BUILT_IN_FORGE_API_*`) still work as fallbacks.
+> **Note**: If you are running this project inside Manus, environment variables are injected automatically — no `.env` file needed.
 
 ---
 
 ## 3. Database Setup
 
-The project uses **Drizzle ORM** with MySQL/TiDB.
+The project uses **Drizzle ORM** with MySQL/TiDB. A `docker-compose.yml` is included for local MySQL 8.4:
 
 ```bash
-# Generate migrations and apply them to the database
-pnpm db:push
+docker compose up -d         # start MySQL
+pnpm db:push                 # generate and apply migrations
 ```
 
-Schema is defined in `drizzle/schema.ts`. All query helpers live in `server/db.ts`.
+Schema is defined in `drizzle/schema.ts` (9 tables). All query helpers live in `server/db.ts`.
 
 ---
 
@@ -77,7 +86,7 @@ pnpm dev
 
 The app runs on **http://localhost:3000** by default.
 
-- Frontend (Vite): served via Express proxy
+- Frontend (Vite): served via Express proxy with HMR
 - Backend (tRPC): available at `/api/trpc`
 - OAuth callback: `/api/oauth/callback`
 
@@ -89,12 +98,15 @@ The app runs on **http://localhost:3000** by default.
 pnpm test
 ```
 
-Test files live in `server/*.test.ts`. There are currently **16 test files** covering:
+Test files live in `server/*.test.ts`. There are **20 test files** covering:
 - AI assistant, AI chat, and question framework
-- Product management (create, edit, delete, QR lookup)
+- Product management (create, edit, delete, QR lookup, registration, removal)
 - Authentication (logout), account deletion, profile update
-- Feed, scan history, documents, settings
-- Crypto utilities and cleanup
+- Feed, scan history, documents, settings, sharing
+- OpenGraph scraping, deep-link resolution
+- Crypto utilities, cleanup
+
+Tests use mocked contexts — no database required.
 
 ---
 
@@ -104,31 +116,39 @@ Test files live in `server/*.test.ts`. There are currently **16 test files** cov
 thap-mobile/
 ├── client/
 │   ├── src/
-│   │   ├── pages/          ← Feature pages (Home, Products, AI, etc.)
-│   │   ├── components/     ← Reusable UI components (shadcn/ui based)
-│   │   ├── contexts/       ← React contexts (Theme, etc.)
-│   │   ├── hooks/          ← Custom hooks
+│   │   ├── pages/          ← 24 feature pages
+│   │   ├── components/     ← Reusable UI (11 app + 28 shadcn/ui)
+│   │   ├── _core/hooks/    ← useAuth hook
+│   │   ├── locales/        ← i18n (14 languages)
 │   │   ├── lib/trpc.ts     ← tRPC client binding
+│   │   ├── const.ts        ← Client constants
 │   │   ├── App.tsx         ← Routes and layout
 │   │   └── index.css       ← Global styles and Tailwind theme
 │   └── public/
 │       ├── manifest.json   ← PWA manifest
-│       └── sw.js           ← Service worker (offline support)
+│       ├── sw.js           ← Service worker (offline support)
+│       └── assets/         ← Static images
 ├── server/
 │   ├── routers.ts          ← All tRPC procedures (API layer)
 │   ├── db.ts               ← Database query helpers
 │   ├── storage.ts          ← S3 file storage helpers
-│   ├── *.test.ts           ← Vitest test files
-│   └── _core/              ← Framework internals (OAuth, LLM, etc.)
+│   ├── opengraph.ts        ← OpenGraph URL scraping
+│   ├── deeplinkTings.ts    ← Legacy Tings deep-link resolver
+│   ├── icecat.ts           ← Icecat product lookup
+│   ├── *.test.ts           ← 20 Vitest test files
+│   └── _core/              ← Framework internals (OAuth, LLM, crypto, etc.)
 ├── drizzle/
-│   ├── schema.ts           ← Database schema (source of truth)
-│   └── *.sql               ← Migration files
+│   ├── schema.ts           ← Database schema (9 tables, source of truth)
+│   └── *.sql               ← Generated migration files
 ├── shared/
 │   ├── types.ts            ← Shared TypeScript types
-│   ├── aiQuestions.ts      ← AI question definitions
-│   └── const.ts            ← Shared constants
-├── todo.md                 ← Feature and bug tracking
-└── LOCAL_DEVELOPMENT.md    ← This file
+│   ├── aiQuestions.ts       ← AI question definitions
+│   ├── const.ts            ← Shared constants
+│   └── _core/errors.ts     ← Error definitions
+├── scripts/                 ← Build and utility scripts
+├── serviceScripts/          ← Docker service management (sh + ps1)
+├── docker-compose.yml       ← Local MySQL 8.4
+└── LOCAL_DEVELOPMENT.md     ← This file
 ```
 
 ---
@@ -148,11 +168,11 @@ thap-mobile/
 
 ```tsx
 // Query (read)
-const { data, isLoading } = trpc.products.getAll.useQuery();
+const { data, isLoading } = trpc.products.myProducts.useQuery();
 
 // Mutation (write)
-const createProduct = trpc.products.create.useMutation({
-  onSuccess: () => utils.products.getAll.invalidate()
+const addProduct = trpc.products.addToMyThings.useMutation({
+  onSuccess: () => utils.products.myProducts.invalidate()
 });
 ```
 
@@ -161,42 +181,60 @@ const createProduct = trpc.products.create.useMutation({
 ```ts
 // server/routers.ts
 export const appRouter = router({
-  // Accessible without login
-  products: publicProcedure.query(() => { ... }),
+  products: router({
+    // Public: accessible without login
+    getByProductId: publicProcedure
+      .input(z.object({ productId: z.string() }))
+      .query(({ input }) => db.getProductByProductId(input.productId)),
 
-  // Requires authenticated user — ctx.user is available
-  myProducts: protectedProcedure.query(({ ctx }) => {
-    return db.getProductsByUser(ctx.user.id);
+    // Protected: requires authenticated user — ctx.user is available
+    myProducts: protectedProcedure.query(({ ctx }) => {
+      return db.getProductsByUser(ctx.user.id);
+    }),
   }),
 });
 ```
 
+### Dev Auth Bypass
+
+Set `DEV_AUTH_OPEN_ID` in `.env` to skip OAuth during development. A user is auto-created with that `openId` on first request. Only works when `NODE_ENV !== "production"`.
+
 ---
 
-## 8. Connecting Legacy App Features
+## 8. Routes
 
-This project was rebuilt from the legacy Flutter app (`thap_mobile_clone`). To port features from the legacy codebase:
+### Public Routes
+| Path | Page | Description |
+|------|------|-------------|
+| `/` | Home | My Things dashboard |
+| `/search` | Search | Product search |
+| `/scan` | Scan | QR code scanner |
+| `/login` | Login | Sign-in page |
+| `/menu` | MenuPage | Navigation menu |
+| `/language-selection` | LanguageSelection | Choose language |
+| `/country-selection` | CountrySelection | Choose country |
+| `/legal` | LegalPage | Legal information |
+| `/help-support` | HelpSupportPage | Help and support |
+| `/share/:token` | SharedProduct | View shared product |
 
-1. **Identify the feature** in `source/lib/` of the legacy repo
-2. **Map the data model** — legacy uses local SQLite, this app uses MySQL via Drizzle
-3. **Add schema** in `drizzle/schema.ts` for any new tables needed
-4. **Implement server procedure** in `server/routers.ts`
-5. **Build the UI** using React + shadcn/ui components
+### Protected Routes (require auth)
+| Path | Page | Description |
+|------|------|-------------|
+| `/settings` | Settings | App settings |
+| `/ai-settings` | AISettings | AI provider config |
+| `/tags` | TagManagement | Manage product tags |
+| `/product/:id/edit` | ProductEdit | Edit product instance |
+| `/product/:id/register` | ProductRegister | Register product |
+| `/product/:id` | ProductDetail | Product details |
+| `/scan-history` | ScanHistory | Scan history |
+| `/ai-chat/:productId` | AIChat | AI chat for product |
+| `/user-account` | UserAccount | Account overview |
+| `/profile-edit` | ProfileEdit | Edit name/email |
+| `/feed` | Feed | Brand feed |
+| `/notification-settings` | NotificationSettings | Notification prefs |
+| `/privacy-settings` | PrivacySettings | Privacy controls |
 
-**Key legacy features already ported**:
-- ✅ Product catalog (browse, search, filter)
-- ✅ Product detail view
-- ✅ QR code scanning
-- ✅ User authentication
-- ✅ AI assistant with contextual questions
-- ✅ Settings and preferences
-- ✅ PWA (installable on mobile)
-
-**Legacy features pending**:
-- ⬜ NFC tag reading (requires Capacitor integration — see validation project)
-- ⬜ Offline-first database (requires Capacitor SQLite plugin)
-- ⬜ Push notifications (requires Firebase + Capacitor)
-- ⬜ File system access (requires Capacitor Filesystem plugin)
+Lazy-loaded pages (16): Feed, Settings, AISettings, ProductDetail, ScanHistory, AIChat, ProductEdit, ProductRegister, TagManagement, UserAccount, ProfileEdit, NotificationSettings, PrivacySettings, LegalPage, HelpSupportPage, SharedProduct.
 
 ---
 
@@ -204,23 +242,31 @@ This project was rebuilt from the legacy Flutter app (`thap_mobile_clone`). To p
 
 | Decision | Choice | Rationale |
 |----------|--------|-----------|
-| API layer | tRPC | End-to-end type safety, no REST boilerplate |
+| API layer | tRPC 11 | End-to-end type safety, no REST boilerplate |
 | ORM | Drizzle | Lightweight, type-safe, fast migrations |
-| UI components | shadcn/ui | Accessible, composable, Tailwind-native |
-| State management | tRPC query cache | No Redux/Zustand needed for server state |
-| Auth | Manus OAuth | Pre-integrated, zero config |
-| Mobile distribution | PWA + Capacitor (planned) | Web-first with native plugin access |
+| UI components | shadcn/ui + Radix | Accessible, composable, Tailwind-native |
+| State management | TanStack Query cache | No Redux/Zustand needed for server state |
+| Auth | Google Sign-In + JWT cookies | Google ID token verification, with dev bypass mode |
+| Animations | Framer Motion | Page transitions, card animations |
+| i18n | i18next | 14 languages, browser detection |
+| Mobile distribution | PWA (Capacitor planned) | Web-first with native plugin access |
 
 ---
 
 ## 10. Useful Commands
 
 ```bash
-pnpm dev          # Start development server
-pnpm build        # Production build
-pnpm test         # Run test suite
-pnpm check        # TypeScript type check
-pnpm db:push      # Generate migrations and apply to database
+pnpm dev              # Start development server
+pnpm build            # Production build
+pnpm start            # Run production bundle
+pnpm test             # Run test suite (20 files)
+pnpm check            # TypeScript type check
+pnpm format           # Format with Prettier
+pnpm db:push          # Generate and apply migrations
+pnpm icons            # Generate PWA icons
+pnpm services:start   # Start Docker MySQL
+pnpm services:stop    # Stop Docker MySQL
+pnpm services:restart # Restart Docker MySQL
 ```
 
 ---
@@ -229,7 +275,7 @@ pnpm db:push      # Generate migrations and apply to database
 
 1. Create a feature branch: `git checkout -b feature/your-feature-name`
 2. Make changes and write tests
-3. Run `pnpm test` — all tests must pass
+3. Run `pnpm test` and `pnpm check` — all must pass
 4. Open a pull request with a clear description
 
 ---
@@ -238,13 +284,14 @@ pnpm db:push      # Generate migrations and apply to database
 
 | Document | Purpose |
 |----------|---------|
-| `README.md` | Project overview and template documentation |
-| `todo.md` | Current feature backlog and bug tracker |
+| `README.md` | Project overview |
+| `LOCAL_SETUP.md` | Step-by-step local setup |
+| `DEPLOYMENT_CHECKLIST.md` | Pre-launch verification |
+| `.env.example` | Environment variable template |
+| `docs/03-development/ENVIRONMENT_VARIABLE_SOURCES.md` | Where each env var comes from |
 | `docs/01-product/PRD_Product_Requirements_Document.md` | Full product requirements |
 | `docs/02-architecture/DESIGN_DOCUMENTATION.md` | UI/UX design decisions |
-| `docs/02-architecture/ARCHITECTURAL_COMPARISON.md` | Legacy vs. rebuilt comparison |
-| `docs/02-architecture/THAP_ARCHITECTURAL_RECOMMENDATION.md` | Architecture decision rationale |
-| `docs/04-validation/VALIDATION_ROADMAP.md` | Capacitor validation plan (Week 1-3) |
+| `docs/04-validation/VALIDATION_ROADMAP.md` | Capacitor validation plan |
 
 ---
 

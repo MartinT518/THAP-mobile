@@ -5,8 +5,6 @@ import { MobileLayout } from "./MobileLayout";
 import { Button } from "@/components/ui/button";
 import { Card } from "@/components/ui/card";
 import { LogIn, Loader2 } from "lucide-react";
-import { getLoginUrl } from "@/const";
-
 interface ProtectedRouteProps {
   children: ReactNode;
 }
@@ -42,7 +40,7 @@ export function ProtectedRoute({ children }: ProtectedRouteProps) {
                 size="lg"
                 className="rounded-full w-full"
                 onClick={() => {
-                  window.location.href = getLoginUrl();
+                  window.location.href = "/login";
                 }}
               >
                 {t("common.signIn")}

@@ -6,9 +6,11 @@
     <meta
       name="viewport"
       content="width=device-width, initial-scale=1.0, maximum-scale=1, viewport-fit=cover" />
+    <link rel="icon" type="image/svg+xml" href="/favicon.svg" />
     <link rel="icon" type="image/png" href="%VITE_APP_LOGO%" />
     <link rel="apple-touch-icon" href="%VITE_APP_LOGO%" />
     <meta name="theme-color" content="#2196F3" />
+    <meta name="mobile-web-app-capable" content="yes" />
     <meta name="apple-mobile-web-app-capable" content="yes" />
     <meta name="apple-mobile-web-app-status-bar-style" content="default" />
     <meta name="description" content="Manage your products throughout their lifecycle with AI-powered assistance" />
@@ -21,12 +23,13 @@
   </head>
 
   <body>
-    <script>
-      if ('serviceWorker' in navigator) {
+    <script type="module">
+      if (import.meta.env.PROD && 'serviceWorker' in navigator) {
         window.addEventListener('load', () => {
-          navigator.serviceWorker.register('/sw.js')
-            .then(registration => console.log('SW registered:', registration))
-            .catch(error => console.log('SW registration failed:', error));
+          navigator.serviceWorker
+            .register('/sw.js')
+            .then((registration) => console.log('SW registered:', registration))
+            .catch((error) => console.log('SW registration failed:', error));
         });
       }
     </script>

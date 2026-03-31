@@ -3,20 +3,52 @@ import fs from "fs";
 import { type Server } from "http";
 import { nanoid } from "nanoid";
 import path from "path";
-import { createServer as createViteServer } from "vite";
-import viteConfig from "../../vite.config";
+import { createServer as createViteServer, type UserConfig } from "vite";
+import viteConfigExport from "../../vite.config";
 
-export async function setupVite(app: Express, server: Server) {
-  const serverOptions = {
-    middlewareMode: true,
-    hmr: { server },
-    allowedHosts: true as const,
-  };
+type ResolvedServerOptions = NonNullable<UserConfig["server"]>;
+type ResolvedHmrOptions = Exclude<
+  ResolvedServerOptions["hmr"],
+  boolean | undefined
+>;
+
+function resolveViteConfig(): UserConfig {
+  if (typeof viteConfigExport === "function") {
+    return viteConfigExport({ mode: "development", command: "serve" } as never) as UserConfig;
+  }
+  return viteConfigExport as UserConfig;
+}
+
+function resolveServerOptions(config: UserConfig): ResolvedServerOptions {
+  return typeof config.server === "object" && config.server !== null
+    ? config.server
+    : {};
+}
+
+function resolveHmrOptions(serverOptions: ResolvedServerOptions): ResolvedHmrOptions {
+  return typeof serverOptions.hmr === "object" && serverOptions.hmr !== null
+    ? serverOptions.hmr
+    : {};
+}
+
+export async function setupVite(app: Express, server: Server, port: number) {
+  const resolved = resolveViteConfig();
+  const resolvedServer = resolveServerOptions(resolved);
+  const resolvedHmr = resolveHmrOptions(resolvedServer);
 
   const vite = await createViteServer({
-    ...viteConfig,
+    ...resolved,
     configFile: false,
-    server: serverOptions,
+    server: {
+      ...resolvedServer,
+      middlewareMode: true,
+      allowedHosts: resolvedServer.allowedHosts ?? ["localhost", "127.0.0.1"],
+      hmr: {
+        ...resolvedHmr,
+        server,
+        clientPort: port,
+      },
+    },
     appType: "custom",
   });
 
