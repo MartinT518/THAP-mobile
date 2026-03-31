@@ -2,7 +2,6 @@ import { MobileLayout } from "@/components/MobileLayout";
 import { AppBar } from "@/components/AppBar";
 import { useCallback, useRef, useState } from "react";
 import { Scanner, type IDetectedBarcode } from "@yudiel/react-qr-scanner";
-import type { BarcodeFormat } from "barcode-detector";
 import { Button } from "@/components/ui/button";
 import { Card } from "@/components/ui/card";
 import { AlertCircle, CheckCircle, Loader2, LogIn } from "lucide-react";
@@ -11,6 +10,17 @@ import { trpc } from "@/lib/trpc";
 import { useAuth } from "@/_core/hooks/useAuth";
 import { toast } from "sonner";
 import { useTranslation } from "react-i18next";
+
+type BarcodeFormat =
+  | "qr_code"
+  | "ean_13"
+  | "ean_8"
+  | "upc_a"
+  | "upc_e"
+  | "code_128"
+  | "code_39"
+  | "itf"
+  | "data_matrix";
 
 type ScanState = "scanning" | "looking_up" | "found" | "not_found" | "error";
 
