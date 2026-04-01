@@ -101,6 +101,5 @@ temp/
 
 # Cursor IDE (keep .cursor/rules/ tracked for team AI rules)
 .cursor/*
-!.cursor/rules/
 
 serviceScripts
